@@ -1,0 +1,13 @@
+---
+- name: Renew OpenBao listener certificates
+  hosts: rhel10
+  become: true
+  gather_facts: true
+  vars:
+    openbao_validate_bootstrap_inputs: false
+    openbao_run_acme_renewal_now: true
+  pre_tasks:
+    - name: Load OpenBao variable files
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+  roles:
+    - openbao_acme_client

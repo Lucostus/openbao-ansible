@@ -1,0 +1,166 @@
+---
+- name: Set bootstrap host fact
+  ansible.builtin.set_fact:
+    openbao_bootstrap_host: "{{ groups[openbao_cluster_group][0] }}"
+
+- name: Check OpenBao initialization status on bootstrap host
+  ansible.builtin.command: bao status -format=json
+  environment:
+    BAO_ADDR: "{{ hostvars[openbao_bootstrap_host].openbao_cli_addr }}"
+    VAULT_ADDR: "{{ hostvars[openbao_bootstrap_host].openbao_cli_addr }}"
+    BAO_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
+    VAULT_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
+  delegate_to: "{{ openbao_bootstrap_host }}"
+  register: openbao_bootstrap_status
+  changed_when: false
+  failed_when: false
+  run_once: true
+
+- name: Create secure artifact directory on controller
+  ansible.builtin.file:
+    path: "{{ openbao_secure_artifacts_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Initialize OpenBao with recovery keys on bootstrap host
+  ansible.builtin.command:
+    argv:
+      - bao
+      - operator
+      - init
+      - "-recovery-shares={{ openbao_recovery_shares }}"
+      - "-recovery-threshold={{ openbao_recovery_threshold }}"
+      - -format=json
+  environment:
+    BAO_ADDR: "{{ hostvars[openbao_bootstrap_host].openbao_cli_addr }}"
+    VAULT_ADDR: "{{ hostvars[openbao_bootstrap_host].openbao_cli_addr }}"
+    BAO_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
+    VAULT_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
+  delegate_to: "{{ openbao_bootstrap_host }}"
+  register: openbao_init_result
+  changed_when: true
+  no_log: true
+  run_once: true
+  when: not ((openbao_bootstrap_status.stdout | default('{}') | from_json).initialized | default(false) | bool)
+
+- name: Store OpenBao init output only on the controller
+  ansible.builtin.copy:
+    content: "{{ openbao_init_result.stdout }}"
+    dest: "{{ openbao_init_artifact }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  no_log: true
+  run_once: true
+  when: openbao_init_result is defined and openbao_init_result is changed
+
+- name: Wait for every OpenBao node to be initialized and unsealed
+  ansible.builtin.command: bao status -format=json
+  environment:
+    BAO_ADDR: "{{ openbao_cli_addr }}"
+    VAULT_ADDR: "{{ openbao_cli_addr }}"
+    BAO_CACERT: "{{ openbao_ca_cert_file }}"
+    VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+  register: openbao_node_status
+  changed_when: false
+  until:
+    - openbao_node_status.rc == 0
+    - (openbao_node_status.stdout | from_json).initialized | default(false) | bool
+    - not ((openbao_node_status.stdout | from_json).sealed | default(true) | bool)
+  retries: 60
+  delay: 5
+
+- name: Check init artifact exists when no operator token was supplied
+  ansible.builtin.stat:
+    path: "{{ openbao_init_artifact }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_init_artifact_stat
+  run_once: true
+  when: openbao_operator_token | length == 0
+
+- name: Assert an operator token source is available for post-bootstrap checks
+  ansible.builtin.assert:
+    that:
+      - openbao_operator_token | length > 0 or openbao_init_artifact_stat.stat.exists | default(false)
+    fail_msg: "Set openbao_operator_token or keep {{ openbao_init_artifact }} for authenticated cluster validation."
+  run_once: true
+
+- name: Load init artifact for root token
+  ansible.builtin.slurp:
+    src: "{{ openbao_init_artifact }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_init_artifact_content
+  no_log: true
+  run_once: true
+  when: openbao_operator_token | length == 0
+
+- name: Set OpenBao bootstrap token fact
+  ansible.builtin.set_fact:
+    openbao_bootstrap_token: >-
+      {{
+        openbao_operator_token
+        if openbao_operator_token | length > 0
+        else ((openbao_init_artifact_content.content | b64decode | from_json).root_token)
+      }}
+  no_log: true
+  run_once: true
+
+- name: Validate authenticated access to Raft configuration
+  ansible.builtin.command: bao operator raft list-peers -format=json
+  environment:
+    BAO_ADDR: "{{ hostvars[openbao_bootstrap_host].openbao_cli_addr }}"
+    VAULT_ADDR: "{{ hostvars[openbao_bootstrap_host].openbao_cli_addr }}"
+    BAO_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
+    VAULT_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
+    BAO_TOKEN: "{{ openbao_bootstrap_token }}"
+    VAULT_TOKEN: "{{ openbao_bootstrap_token }}"
+  delegate_to: "{{ openbao_bootstrap_host }}"
+  register: openbao_raft_auth_check
+  changed_when: false
+  failed_when: false
+  no_log: true
+  run_once: true
+
+- name: Assert authenticated Raft validation can run
+  ansible.builtin.assert:
+    that:
+      - openbao_raft_auth_check.rc == 0
+    fail_msg: >-
+      Authenticated Raft validation failed. If this cluster was already
+      initialized, set openbao_operator_token for the live cluster or reset
+      stale controller artifact {{ openbao_init_artifact }} before redeploying.
+  run_once: true
+
+- name: Validate Raft peer list
+  ansible.builtin.command: bao operator raft list-peers -format=json
+  environment:
+    BAO_ADDR: "{{ hostvars[openbao_bootstrap_host].openbao_cli_addr }}"
+    VAULT_ADDR: "{{ hostvars[openbao_bootstrap_host].openbao_cli_addr }}"
+    BAO_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
+    VAULT_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
+    BAO_TOKEN: "{{ openbao_bootstrap_token }}"
+    VAULT_TOKEN: "{{ openbao_bootstrap_token }}"
+  delegate_to: "{{ openbao_bootstrap_host }}"
+  register: openbao_raft_peers
+  changed_when: false
+  no_log: true
+  run_once: true
+  until:
+    - openbao_raft_peers.rc == 0
+    - ((openbao_raft_peers.stdout | from_json).data.config.servers | length) == 3
+    - ((openbao_raft_peers.stdout | from_json).data.config.servers | selectattr('voter', 'equalto', true) | list | length) == 3
+  retries: 24
+  delay: 5
+
+- name: Assert three voting Raft peers are present
+  ansible.builtin.assert:
+    that:
+      - ((openbao_raft_peers.stdout | from_json).data.config.servers | length) == 3
+      - ((openbao_raft_peers.stdout | from_json).data.config.servers | selectattr('voter', 'equalto', true) | list | length) == 3
+    fail_msg: "OpenBao Raft did not converge to three voting peers."
+  run_once: true

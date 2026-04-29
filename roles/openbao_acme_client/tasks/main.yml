@@ -1,0 +1,14 @@
+---
+- name: Skip external ACME client for bootstrap-only mode
+  ansible.builtin.debug:
+    msg: "openbao_tls_mode=bootstrap_only; external certificate renewal is not installed."
+  when: openbao_tls_mode == 'bootstrap_only'
+
+- name: Skip external ACME client for listener ACME mode
+  ansible.builtin.debug:
+    msg: "openbao_tls_mode=listener_acme; OpenBao listener ACME handles renewal."
+  when: openbao_tls_mode == 'listener_acme'
+
+- name: Configure external ACME renewal client
+  ansible.builtin.include_tasks: lego.yml
+  when: openbao_tls_mode == 'file_acme'

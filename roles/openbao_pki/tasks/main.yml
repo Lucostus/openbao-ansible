@@ -1,0 +1,206 @@
+---
+- name: Set PKI leader host fact
+  ansible.builtin.set_fact:
+    openbao_pki_host: "{{ groups[openbao_cluster_group][0] }}"
+  run_once: true
+
+- name: Load init artifact when no operator token was supplied
+  ansible.builtin.slurp:
+    src: "{{ openbao_init_artifact }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_pki_init_artifact
+  no_log: true
+  run_once: true
+  when: openbao_operator_token | length == 0
+
+- name: Set OpenBao PKI token fact
+  ansible.builtin.set_fact:
+    openbao_pki_token: >-
+      {{
+        openbao_operator_token
+        if openbao_operator_token | length > 0
+        else ((openbao_pki_init_artifact.content | b64decode | from_json).root_token)
+      }}
+  no_log: true
+  run_once: true
+
+- name: Set OpenBao PKI command environment
+  ansible.builtin.set_fact:
+    openbao_pki_environment:
+      BAO_ADDR: "{{ hostvars[openbao_pki_host].openbao_cli_addr }}"
+      VAULT_ADDR: "{{ hostvars[openbao_pki_host].openbao_cli_addr }}"
+      BAO_CACERT: "{{ hostvars[openbao_pki_host].openbao_ca_cert_file }}"
+      VAULT_CACERT: "{{ hostvars[openbao_pki_host].openbao_ca_cert_file }}"
+      BAO_TOKEN: "{{ openbao_pki_token }}"
+      VAULT_TOKEN: "{{ openbao_pki_token }}"
+  no_log: true
+  run_once: true
+
+- name: Read OpenBao cluster status for artifact identity
+  ansible.builtin.command: bao status -format=json
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  register: openbao_pki_cluster_status
+  changed_when: false
+  no_log: true
+  run_once: true
+
+- name: Set OpenBao cluster identifier for controller artifacts
+  ansible.builtin.set_fact:
+    openbao_pki_cluster_id: "{{ (openbao_pki_cluster_status.stdout | from_json).cluster_id }}"
+  run_once: true
+
+- name: Read existing audit devices
+  ansible.builtin.command: bao audit list -format=json
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  register: openbao_audit_list
+  changed_when: false
+  no_log: true
+  run_once: true
+
+- name: Assert file audit logging is configured declaratively
+  ansible.builtin.assert:
+    that:
+      - "'file/' in ((openbao_audit_list.stdout | from_json).keys() | list)"
+    fail_msg: "File audit logging must be present from the OpenBao server audit stanza."
+  run_once: true
+
+- name: Read existing secret mounts
+  ansible.builtin.command: bao secrets list -format=json
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  register: openbao_secret_mounts
+  changed_when: false
+  no_log: true
+  run_once: true
+
+- name: Enable OpenBao PKI mount
+  ansible.builtin.command:
+    argv:
+      - bao
+      - secrets
+      - enable
+      - "-path={{ openbao_pki_mount }}"
+      - pki
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  changed_when: true
+  no_log: true
+  run_once: true
+  when: "(openbao_pki_mount ~ '/') not in ((openbao_secret_mounts.stdout | from_json).keys() | list)"
+
+- name: Tune PKI mount for ACME response headers and TTL
+  ansible.builtin.command:
+    argv:
+      - bao
+      - secrets
+      - tune
+      - "-max-lease-ttl={{ openbao_pki_intermediate_ttl }}"
+      - -allowed-response-headers=Location
+      - -allowed-response-headers=Replay-Nonce
+      - -allowed-response-headers=Link
+      - -allowed-response-headers=Last-Modified
+      - "{{ openbao_pki_mount }}"
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  changed_when: false
+  no_log: true
+  run_once: true
+
+- name: Check whether named PKI issuer exists
+  ansible.builtin.command:
+    argv:
+      - bao
+      - read
+      - -format=json
+      - "{{ openbao_pki_mount }}/issuer/{{ openbao_pki_issuer_name }}"
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  register: openbao_pki_issuer_check
+  changed_when: false
+  failed_when: false
+  no_log: true
+  run_once: true
+
+- name: Generate and import OpenBao intermediate CA
+  ansible.builtin.include_tasks: sign_intermediate.yml
+  when: openbao_pki_issuer_check.rc != 0
+  run_once: true
+
+- name: Configure PKI issuing URLs
+  ansible.builtin.command:
+    argv:
+      - bao
+      - write
+      - "{{ openbao_pki_mount }}/config/urls"
+      - "issuing_certificates={{ openbao_public_api_addr }}/v1/{{ openbao_pki_mount }}/ca"
+      - "crl_distribution_points={{ openbao_public_api_addr }}/v1/{{ openbao_pki_mount }}/crl"
+      - "ocsp_servers={{ openbao_public_api_addr }}/v1/{{ openbao_pki_mount }}/ocsp"
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  changed_when: false
+  no_log: true
+  run_once: true
+
+- name: Configure PKI cluster-local ACME path
+  ansible.builtin.command:
+    argv:
+      - bao
+      - write
+      - "{{ openbao_pki_mount }}/config/cluster"
+      - "path={{ openbao_pki_cluster_path }}"
+      - "aia_path={{ openbao_pki_cluster_aia_path }}"
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  changed_when: false
+  no_log: true
+  run_once: true
+
+- name: Configure listener certificate PKI role
+  ansible.builtin.command:
+    argv:
+      - bao
+      - write
+      - "{{ openbao_pki_mount }}/roles/{{ openbao_acme_role_name }}"
+      - "allowed_domains={{ openbao_acme_allowed_domains | join(',') }}"
+      - "allow_bare_domains=true"
+      - "allow_subdomains=false"
+      - "allow_glob_domains=false"
+      - "allow_wildcard_certificates=false"
+      - "server_flag=true"
+      - "client_flag=false"
+      - "no_store=false"
+      - "key_type=ec"
+      - "key_bits=256"
+      - "ttl={{ openbao_pki_leaf_ttl }}"
+      - "max_ttl={{ openbao_pki_leaf_max_ttl }}"
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  changed_when: false
+  no_log: true
+  run_once: true
+
+- name: Enable ACME with external account binding
+  ansible.builtin.command:
+    argv:
+      - bao
+      - write
+      - "{{ openbao_pki_mount }}/config/acme"
+      - "enabled=true"
+      - "default_directory_policy=role:{{ openbao_acme_role_name }}"
+      - "allowed_roles={{ openbao_acme_role_name }}"
+      - "eab_policy=always-required"
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  changed_when: false
+  no_log: true
+  run_once: true
+
+- name: Create missing EAB credentials for each OpenBao node
+  ansible.builtin.include_tasks: create_eab.yml
+  loop: "{{ groups[openbao_cluster_group] }}"
+  loop_control:
+    loop_var: openbao_eab_host
+  run_once: true

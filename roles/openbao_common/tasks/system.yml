@@ -1,0 +1,98 @@
+---
+- name: Install operating system dependencies
+  ansible.builtin.dnf:
+    name:
+      - ca-certificates
+      - curl
+      - gzip
+      - openssl
+      - python3
+      - python3-cryptography
+      - tar
+      - unzip
+    state: present
+
+- name: Install firewalld when firewall management is enabled
+  ansible.builtin.dnf:
+    name: firewalld
+    state: present
+  when: openbao_manage_firewalld | bool
+
+- name: Install SELinux policy tools when SELinux management is enabled
+  ansible.builtin.dnf:
+    name: policycoreutils-python-utils
+    state: present
+  when: openbao_manage_selinux | bool
+
+- name: Ensure firewalld is running when managed
+  ansible.builtin.service:
+    name: firewalld
+    state: started
+    enabled: true
+  when: openbao_manage_firewalld | bool
+
+- name: Ensure OpenBao group exists
+  ansible.builtin.group:
+    name: "{{ openbao_service_group }}"
+    system: true
+    state: present
+
+- name: Ensure OpenBao user exists
+  ansible.builtin.user:
+    name: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    home: "{{ openbao_data_dir }}"
+    shell: /sbin/nologin
+    system: true
+    create_home: false
+    state: present
+
+- name: Create OpenBao directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default(openbao_service_user) }}"
+    group: "{{ item.group | default(openbao_service_group) }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ openbao_config_dir }}", mode: "0750" }
+    - { path: "{{ openbao_data_dir }}", mode: "0750" }
+    - { path: "{{ openbao_raft_path }}", mode: "0750" }
+    - { path: "{{ openbao_log_dir }}", mode: "0750" }
+    - { path: "{{ openbao_tls_dir }}", mode: "0750" }
+    - { path: "{{ openbao_seal_dir }}", mode: "0700" }
+    - { path: "{{ openbao_acme_config_dir }}", mode: "0750" }
+    - { path: "{{ openbao_package_cache_dir }}", mode: "0755", owner: root, group: root }
+    - { path: "{{ openbao_listener_acme_cache_path }}", mode: "0750" }
+
+- name: Check audit log file
+  ansible.builtin.stat:
+    path: "{{ openbao_audit_log_file }}"
+  register: openbao_audit_log_file_stat
+
+- name: Create audit log file when absent
+  ansible.builtin.file:
+    path: "{{ openbao_audit_log_file }}"
+    state: touch
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0640"
+  when: not openbao_audit_log_file_stat.stat.exists
+
+- name: Set audit log file permissions
+  ansible.builtin.file:
+    path: "{{ openbao_audit_log_file }}"
+    state: file
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0640"
+
+- name: Add OpenBao peer host entries
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "{{ hostvars[item].openbao_node_ip | default(hostvars[item].ansible_host) }} {{ hostvars[item].openbao_node_fqdn }}"
+    regexp: "\\s{{ hostvars[item].openbao_node_fqdn | regex_escape }}$"
+    state: present
+    unsafe_writes: true
+  loop: "{{ groups[openbao_cluster_group] }}"
+  when: openbao_manage_hosts_entries | bool

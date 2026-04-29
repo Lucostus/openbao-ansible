@@ -1,0 +1,15 @@
+[Service]
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths={{ openbao_config_dir }} {{ openbao_data_dir }} {{ openbao_log_dir }}
+StateDirectory=openbao
+LogsDirectory=openbao
+RuntimeDirectory=openbao
+MemorySwapMax=0
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native

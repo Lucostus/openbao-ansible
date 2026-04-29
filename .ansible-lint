@@ -1,0 +1,9 @@
+---
+offline: true
+exclude_paths:
+  - .ansible/
+  - secure-artifacts/
+  - files/bootstrap-tls/
+skip_list:
+  - var-naming[no-role-prefix]
+  - run-once[task]

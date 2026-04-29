@@ -1,0 +1,172 @@
+---
+- name: Assert this inventory contains exactly three OpenBao nodes
+  ansible.builtin.assert:
+    that:
+      - groups[openbao_cluster_group] | length == 3
+    fail_msg: "OpenBao HA deployment requires exactly 3 hosts in {{ openbao_cluster_group }}."
+  run_once: true
+
+- name: Assert supported OpenBao deployment options
+  ansible.builtin.assert:
+    that:
+      - openbao_tls_mode in ['file_acme', 'listener_acme', 'bootstrap_only']
+      - openbao_acme_challenge in ['dns-01', 'http-01', 'tls-alpn-01']
+      - openbao_acme_client in ['lego', 'certbot', 'acme.sh']
+      - openbao_lb_mode in ['tcp_passthrough', 'tls_termination', 'none']
+      - openbao_public_fqdn | length > 0
+      - openbao_node_fqdn | length > 0
+    fail_msg: "OpenBao TLS/LB/ACME variables are invalid; check group_vars/rhel10/main.yml."
+
+- name: Assert advertised OpenBao addresses match the TLS listener
+  ansible.builtin.assert:
+    that:
+      - openbao_api_addr is match('^https://')
+      - openbao_cluster_addr is match('^https://')
+      - openbao_cli_addr is match('^https://')
+    fail_msg: "This role configures a TLS listener; OpenBao advertised API, cluster, and CLI addresses must use https://."
+
+- name: Assert listener ACME is only used with OpenBao versions that support it
+  ansible.builtin.assert:
+    that:
+      - openbao_version is version('2.5.0', '>=')
+    fail_msg: "openbao_tls_mode=listener_acme requires OpenBao 2.5.0 or newer."
+  when: openbao_tls_mode == 'listener_acme'
+
+- name: Assert RHEL-like systemd host
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family == 'RedHat'
+      - ansible_facts.service_mgr == 'systemd'
+    fail_msg: "This playbook is written for RHEL-family hosts using systemd."
+
+- name: Assert managed peer addresses are unique and routable
+  ansible.builtin.assert:
+    that:
+      - openbao_peer_host_entry_ips | unique | length == groups[openbao_cluster_group] | length
+    fail_msg: >-
+      OpenBao Raft requires a unique routable peer address for every node when
+      openbao_manage_hosts_entries=true. Current openbao_node_ip values are:
+      {{ openbao_peer_host_entry_ips | join(', ') }}. SSH-only port forwards are
+      not enough for OpenBao HA; set per-host openbao_node_ip/openbao_node_fqdn
+      values that the nodes can reach on {{ openbao_listener_port }}/{{ openbao_cluster_port }},
+      or disable managed host entries and provide working DNS.
+  vars:
+    openbao_peer_host_entry_ips: >-
+      {{
+        groups[openbao_cluster_group]
+        | map('extract', hostvars, 'openbao_node_ip')
+        | map('string')
+        | list
+      }}
+  run_once: true
+  when: openbao_manage_hosts_entries | bool
+
+- name: Check bootstrap certificate on controller
+  ansible.builtin.stat:
+    path: "{{ openbao_tls_bootstrap_cert_src }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_bootstrap_cert_stat
+  when: openbao_tls_mode in ['file_acme', 'bootstrap_only']
+
+- name: Check bootstrap private key on controller
+  ansible.builtin.stat:
+    path: "{{ openbao_tls_bootstrap_key_src }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_bootstrap_key_stat
+  when: openbao_tls_mode in ['file_acme', 'bootstrap_only']
+
+- name: Assert bootstrap TLS files exist
+  ansible.builtin.assert:
+    that:
+      - openbao_bootstrap_cert_stat.stat.exists | default(false)
+      - openbao_bootstrap_key_stat.stat.exists | default(false)
+    fail_msg: >-
+      Missing bootstrap TLS files for {{ inventory_hostname }}. Expected
+      {{ openbao_tls_bootstrap_cert_src }} and {{ openbao_tls_bootstrap_key_src }}.
+  when: openbao_tls_mode in ['file_acme', 'bootstrap_only']
+
+- name: Assert static unseal key and root CA variables are present
+  ansible.builtin.assert:
+    that:
+      - openbao_static_unseal_key_b64 is defined
+      - openbao_root_ca_cert_pem is defined
+      - openbao_root_ca_key_pem is defined
+      - "'BEGIN CERTIFICATE' in openbao_root_ca_cert_pem"
+      - "'BEGIN' in openbao_root_ca_key_pem"
+    fail_msg: "Vaulted static seal key and root CA variables are required."
+  no_log: true
+
+- name: Validate static unseal key length
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - |
+        import base64, os, sys
+        raw = base64.b64decode(os.environ["OPENBAO_STATIC_KEY_B64"], validate=True)
+        sys.exit(0 if len(raw) == 32 else 1)
+  environment:
+    OPENBAO_STATIC_KEY_B64: "{{ openbao_static_unseal_key_b64 }}"
+  changed_when: false
+  no_log: true
+
+- name: Assert DNS-01 has provider material when external ACME is enabled
+  ansible.builtin.assert:
+    that:
+      - openbao_acme_dns_provider | length > 0
+      - openbao_acme_dns_env | length > 0
+    fail_msg: "dns-01 with file_acme requires openbao_acme_dns_provider and vaulted openbao_acme_dns_env."
+  when:
+    - openbao_tls_mode == 'file_acme'
+    - openbao_acme_challenge == 'dns-01'
+
+- name: Assert listener ACME does not request unsupported DNS provider automation
+  ansible.builtin.assert:
+    that:
+      - openbao_acme_challenge != 'dns-01'
+    fail_msg: "OpenBao listener ACME supports HTTP and TLS-ALPN controls; use file_acme for DNS-01 automation."
+  when: openbao_tls_mode == 'listener_acme'
+
+- name: Assert shared-name listener ACME challenge routing is confirmed
+  ansible.builtin.assert:
+    that:
+      - openbao_listener_acme_shared_cache_confirmed | bool
+      - openbao_listener_acme_http_routed | bool
+    fail_msg: "listener_acme with http-01 behind a shared TCP LB needs shared cache and confirmed HTTP challenge routing."
+  when:
+    - openbao_tls_mode == 'listener_acme'
+    - openbao_public_fqdn in openbao_acme_allowed_domains
+    - openbao_acme_challenge == 'http-01'
+
+- name: Assert shared-name TLS-ALPN routing is confirmed
+  ansible.builtin.assert:
+    that:
+      - openbao_listener_acme_shared_cache_confirmed | bool
+      - openbao_listener_acme_tls_alpn_routed | bool
+    fail_msg: "listener_acme with tls-alpn-01 behind a shared TCP LB needs shared cache and confirmed ALPN challenge routing."
+  when:
+    - openbao_tls_mode == 'listener_acme'
+    - openbao_public_fqdn in openbao_acme_allowed_domains
+    - openbao_acme_challenge == 'tls-alpn-01'
+
+- name: Assert shared-name file ACME HTTP challenge routing is confirmed
+  ansible.builtin.assert:
+    that:
+      - openbao_file_acme_http_routed | bool
+    fail_msg: "file_acme with http-01 for the shared FQDN requires confirmed LB/HTTP challenge routing."
+  when:
+    - openbao_tls_mode == 'file_acme'
+    - openbao_public_fqdn in openbao_acme_certificate_domains
+    - openbao_acme_challenge == 'http-01'
+
+- name: Assert shared-name file ACME TLS-ALPN routing is confirmed
+  ansible.builtin.assert:
+    that:
+      - openbao_file_acme_tls_alpn_routed | bool
+    fail_msg: "file_acme with tls-alpn-01 for the shared FQDN requires confirmed LB/ALPN challenge routing."
+  when:
+    - openbao_tls_mode == 'file_acme'
+    - openbao_public_fqdn in openbao_acme_certificate_domains
+    - openbao_acme_challenge == 'tls-alpn-01'

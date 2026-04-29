@@ -1,0 +1,51 @@
+---
+- name: Ensure package cache directory exists
+  ansible.builtin.file:
+    path: "{{ openbao_package_cache_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Set target OpenBao package facts
+  ansible.builtin.set_fact:
+    openbao_target_package_prefix: "{{ openbao_package_prefix_overrides[openbao_version] | default('openbao') }}"
+
+- name: Remove legacy OpenBao package names before package-name transition
+  ansible.builtin.dnf:
+    name: "{{ item }}"
+    state: absent
+  loop: "{{ openbao_package_prefix_overrides.values() | unique | list }}"
+  when: item != openbao_target_package_prefix
+
+- name: Install target OpenBao package
+  ansible.builtin.include_role:
+    name: openbao_common
+    tasks_from: install_package
+
+- name: Restart OpenBao after package upgrade
+  ansible.builtin.service:
+    name: openbao
+    state: restarted
+
+- name: Wait for OpenBao listener after upgrade
+  ansible.builtin.wait_for:
+    host: "{{ openbao_node_fqdn }}"
+    port: "{{ openbao_listener_port }}"
+    timeout: 120
+
+- name: Wait for OpenBao health after upgrade
+  ansible.builtin.command: bao status -format=json
+  environment:
+    BAO_ADDR: "{{ openbao_cli_addr }}"
+    VAULT_ADDR: "{{ openbao_cli_addr }}"
+    BAO_CACERT: "{{ openbao_ca_cert_file }}"
+    VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+  register: openbao_upgrade_node_status
+  changed_when: false
+  until:
+    - openbao_upgrade_node_status.rc == 0
+    - not ((openbao_upgrade_node_status.stdout | from_json).sealed | default(true) | bool)
+    - (openbao_upgrade_node_status.stdout | from_json).version == openbao_target_version
+  retries: 60
+  delay: 5

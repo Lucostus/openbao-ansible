@@ -1,0 +1,58 @@
+---
+- name: Install OpenBao root CA certificate
+  ansible.builtin.copy:
+    content: "{{ openbao_root_ca_cert_pem }}"
+    dest: "{{ openbao_ca_cert_file }}"
+    owner: root
+    group: "{{ openbao_service_group }}"
+    mode: "0644"
+  no_log: true
+
+- name: Install bootstrap OpenBao listener certificate
+  ansible.builtin.copy:
+    src: "{{ openbao_tls_bootstrap_cert_src }}"
+    dest: "{{ openbao_tls_cert_file }}"
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0640"
+  when: openbao_tls_mode in ['file_acme', 'bootstrap_only']
+
+- name: Install bootstrap OpenBao listener private key
+  ansible.builtin.copy:
+    src: "{{ openbao_tls_bootstrap_key_src }}"
+    dest: "{{ openbao_tls_key_file }}"
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0600"
+  no_log: true
+  when: openbao_tls_mode in ['file_acme', 'bootstrap_only']
+
+- name: Install static auto-unseal key as raw bytes
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - |
+        import base64, os, pathlib, sys
+        path = pathlib.Path(os.environ["OPENBAO_STATIC_KEY_PATH"])
+        raw = base64.b64decode(os.environ["OPENBAO_STATIC_KEY_B64"], validate=True)
+        if path.exists() and path.read_bytes() == raw:
+            path.chmod(0o600)
+            sys.exit(0)
+        path.write_bytes(raw)
+        path.chmod(0o600)
+        sys.exit(2)
+  environment:
+    OPENBAO_STATIC_KEY_B64: "{{ openbao_static_unseal_key_b64 }}"
+    OPENBAO_STATIC_KEY_PATH: "{{ openbao_static_unseal_key_path }}"
+  no_log: true
+  changed_when: openbao_static_key_write.rc == 2
+  failed_when: openbao_static_key_write.rc not in [0, 2]
+  register: openbao_static_key_write
+
+- name: Set static auto-unseal key ownership
+  ansible.builtin.file:
+    path: "{{ openbao_static_unseal_key_path }}"
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0600"

@@ -1,0 +1,74 @@
+---
+- name: Render OpenBao server configuration
+  ansible.builtin.template:
+    src: openbao.hcl.j2
+    dest: "{{ openbao_config_dir }}/openbao.hcl"
+    owner: root
+    group: "{{ openbao_service_group }}"
+    mode: "0640"
+    validate: "bao operator validate-config -config=%s"
+  notify: Restart OpenBao
+
+- name: Install OpenBao systemd unit
+  ansible.builtin.template:
+    src: openbao.service.j2
+    dest: /etc/systemd/system/openbao.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart OpenBao
+
+- name: Install OpenBao systemd hardening override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/openbao.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: openbao_systemd_hardening_enabled | bool
+
+- name: Install OpenBao systemd hardening override
+  ansible.builtin.template:
+    src: hardening.conf.j2
+    dest: /etc/systemd/system/openbao.service.d/hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart OpenBao
+  when: openbao_systemd_hardening_enabled | bool
+
+- name: Remove OpenBao systemd hardening override when disabled
+  ansible.builtin.file:
+    path: /etc/systemd/system/openbao.service.d/hardening.conf
+    state: absent
+  notify:
+    - Reload systemd
+    - Restart OpenBao
+  when: not (openbao_systemd_hardening_enabled | bool)
+
+- name: Flush systemd handlers before service start
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start OpenBao
+  ansible.builtin.service:
+    name: openbao
+    enabled: true
+    state: started
+
+- name: Wait for OpenBao HTTPS listener
+  ansible.builtin.wait_for:
+    host: "{{ openbao_node_fqdn }}"
+    port: "{{ openbao_listener_port }}"
+    timeout: 120
+
+- name: Reconcile audit log file permissions after OpenBao startup
+  ansible.builtin.file:
+    path: "{{ openbao_audit_log_file }}"
+    state: file
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0640"

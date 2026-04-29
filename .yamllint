@@ -1,0 +1,18 @@
+---
+extends: default
+
+ignore: |
+  .ansible/
+  secure-artifacts/
+  files/bootstrap-tls/
+
+rules:
+  line-length: disable
+  braces:
+    max-spaces-inside: 1
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: false
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true

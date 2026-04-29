@@ -1,0 +1,62 @@
+---
+- name: Check local EAB artifact for {{ openbao_eab_host }}
+  ansible.builtin.stat:
+    path: "{{ openbao_secure_artifacts_dir }}/{{ openbao_eab_host }}-eab.json"
+  delegate_to: localhost
+  become: false
+  register: openbao_eab_artifact
+
+- name: Read local EAB artifact for {{ openbao_eab_host }}
+  ansible.builtin.slurp:
+    src: "{{ openbao_secure_artifacts_dir }}/{{ openbao_eab_host }}-eab.json"
+  delegate_to: localhost
+  become: false
+  register: openbao_eab_artifact_content
+  no_log: true
+  when: openbao_eab_artifact.stat.exists
+
+- name: Determine whether local EAB artifact matches this cluster for {{ openbao_eab_host }}
+  ansible.builtin.set_fact:
+    openbao_eab_artifact_current: >-
+      {{
+        openbao_eab_artifact.stat.exists
+        and ((openbao_eab_artifact_content.content | b64decode | from_json).cluster_id | default('')) == openbao_pki_cluster_id
+        and ((openbao_eab_artifact_content.content | b64decode | from_json).host | default('')) == openbao_eab_host
+        and ((openbao_eab_artifact_content.content | b64decode | from_json).directory | default('')) == openbao_acme_directory
+      }}
+  no_log: true
+
+- name: Generate EAB token for {{ openbao_eab_host }}
+  ansible.builtin.command:
+    argv:
+      - bao
+      - write
+      - -format=json
+      - -f
+      - "{{ openbao_pki_mount }}/roles/{{ openbao_acme_role_name }}/acme/new-eab"
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  register: openbao_new_eab
+  changed_when: true
+  no_log: true
+  when: not openbao_eab_artifact_current | bool
+
+- name: Store EAB token on controller only for {{ openbao_eab_host }}
+  ansible.builtin.copy:
+    content: >-
+      {{
+        {
+          'host': openbao_eab_host,
+          'cluster_id': openbao_pki_cluster_id,
+          'directory': openbao_acme_directory,
+          'email': openbao_acme_email,
+          'key_id': ((openbao_new_eab.stdout | from_json).data.key_id | default((openbao_new_eab.stdout | from_json).data.id)),
+          'hmac_key': ((openbao_new_eab.stdout | from_json).data.hmac_key | default((openbao_new_eab.stdout | from_json).data.key))
+        } | to_nice_json
+      }}
+    dest: "{{ openbao_secure_artifacts_dir }}/{{ openbao_eab_host }}-eab.json"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  no_log: true
+  when: not openbao_eab_artifact_current | bool

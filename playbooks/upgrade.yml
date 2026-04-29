@@ -1,0 +1,156 @@
+---
+- name: Classify OpenBao nodes before rolling upgrade
+  hosts: rhel10
+  become: true
+  gather_facts: true
+  vars:
+    openbao_validate_bootstrap_inputs: false
+  pre_tasks:
+    - name: Load OpenBao variable files
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+  tasks:
+    - name: Read node leader status
+      ansible.builtin.command: bao read -format=json sys/leader
+      environment:
+        BAO_ADDR: "{{ openbao_cli_addr }}"
+        VAULT_ADDR: "{{ openbao_cli_addr }}"
+        BAO_CACERT: "{{ openbao_ca_cert_file }}"
+        VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+      register: openbao_upgrade_leader_status
+      changed_when: false
+      failed_when: false
+
+    - name: Group standby nodes
+      ansible.builtin.group_by:
+        key: openbao_upgrade_standby
+      when:
+        - openbao_upgrade_leader_status.rc == 0
+        - not ((openbao_upgrade_leader_status.stdout | from_json).data.is_self | default(false) | bool)
+
+    - name: Group active nodes
+      ansible.builtin.group_by:
+        key: openbao_upgrade_active
+      when:
+        - openbao_upgrade_leader_status.rc == 0
+        - (openbao_upgrade_leader_status.stdout | from_json).data.is_self | default(false) | bool
+
+    - name: Assert every node was classified for upgrade
+      ansible.builtin.assert:
+        that:
+          - ((groups.openbao_upgrade_standby | default([])) + (groups.openbao_upgrade_active | default([]))) | unique | length == groups.rhel10 | length
+        fail_msg: "Could not classify all OpenBao nodes before rolling upgrade."
+      run_once: true
+
+    - name: Create controller artifact directory
+      ansible.builtin.file:
+        path: "{{ openbao_secure_artifacts_dir }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Load init artifact for snapshot token
+      ansible.builtin.slurp:
+        src: "{{ openbao_init_artifact }}"
+      delegate_to: localhost
+      become: false
+      register: openbao_upgrade_init_artifact
+      no_log: true
+      when: openbao_operator_token | length == 0
+
+    - name: Set snapshot token
+      ansible.builtin.set_fact:
+        openbao_snapshot_token: >-
+          {{
+            openbao_operator_token
+            if openbao_operator_token | length > 0
+            else ((openbao_upgrade_init_artifact.content | b64decode | from_json).root_token)
+          }}
+      no_log: true
+
+    - name: Save Raft snapshot before upgrade
+      ansible.builtin.command:
+        argv:
+          - bao
+          - operator
+          - raft
+          - snapshot
+          - save
+          - "/tmp/{{ openbao_cluster_name }}-pre-upgrade-{{ ansible_facts.date_time.iso8601_basic_short }}.snap"
+      environment:
+        BAO_ADDR: "{{ openbao_cli_addr }}"
+        VAULT_ADDR: "{{ openbao_cli_addr }}"
+        BAO_CACERT: "{{ openbao_ca_cert_file }}"
+        VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+        BAO_TOKEN: "{{ openbao_snapshot_token }}"
+        VAULT_TOKEN: "{{ openbao_snapshot_token }}"
+      no_log: true
+      changed_when: true
+      when: inventory_hostname in (groups.openbao_upgrade_active | default([]))
+
+    - name: Fetch Raft snapshot to controller
+      ansible.builtin.fetch:
+        src: "/tmp/{{ openbao_cluster_name }}-pre-upgrade-{{ ansible_facts.date_time.iso8601_basic_short }}.snap"
+        dest: "{{ openbao_secure_artifacts_dir }}/"
+        flat: true
+      when: inventory_hostname in (groups.openbao_upgrade_active | default([]))
+
+- name: Upgrade standby nodes first
+  hosts: openbao_upgrade_standby
+  become: true
+  gather_facts: true
+  serial: 1
+  vars:
+    openbao_validate_bootstrap_inputs: false
+  pre_tasks:
+    - name: Load OpenBao variable files
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+
+    - name: Select target OpenBao version
+      ansible.builtin.set_fact:
+        openbao_version: "{{ openbao_target_version }}"
+  roles:
+    - openbao_upgrade
+
+- name: Upgrade active node last
+  hosts: openbao_upgrade_active
+  become: true
+  gather_facts: true
+  serial: 1
+  vars:
+    openbao_validate_bootstrap_inputs: false
+  pre_tasks:
+    - name: Load OpenBao variable files
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+
+    - name: Select target OpenBao version
+      ansible.builtin.set_fact:
+        openbao_version: "{{ openbao_target_version }}"
+  roles:
+    - openbao_upgrade
+
+- name: Validate upgraded OpenBao cluster
+  hosts: rhel10
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Load OpenBao variable files
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+  tasks:
+    - name: Confirm upgraded node status
+      ansible.builtin.command: bao status -format=json
+      environment:
+        BAO_ADDR: "{{ openbao_cli_addr }}"
+        VAULT_ADDR: "{{ openbao_cli_addr }}"
+        BAO_CACERT: "{{ openbao_ca_cert_file }}"
+        VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+      register: openbao_final_status
+      changed_when: false
+
+    - name: Assert target OpenBao version and unsealed state
+      ansible.builtin.assert:
+        that:
+          - (openbao_final_status.stdout | from_json).sealed == false
+          - (openbao_final_status.stdout | from_json).version == openbao_target_version
+        fail_msg: "OpenBao did not finish healthy on {{ inventory_hostname }} after upgrade."

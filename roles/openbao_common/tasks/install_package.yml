@@ -1,0 +1,28 @@
+---
+- name: Set OpenBao package facts for this version
+  ansible.builtin.set_fact:
+    openbao_package_prefix: "{{ openbao_package_prefix_overrides[openbao_version] | default('openbao') }}"
+    openbao_package_file: "{{ openbao_package_prefix_overrides[openbao_version] | default('openbao') }}_{{ openbao_version }}_linux_{{ openbao_arch }}.rpm"
+
+- name: Download OpenBao checksum file
+  ansible.builtin.get_url:
+    url: "{{ openbao_release_base_url }}/{{ openbao_release_checksum_file }}"
+    dest: "{{ openbao_package_cache_dir }}/{{ openbao_release_checksum_file }}-{{ openbao_version }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Download pinned OpenBao RPM with checksum verification
+  ansible.builtin.get_url:
+    url: "{{ openbao_release_base_url }}/{{ openbao_package_file }}"
+    dest: "{{ openbao_package_cache_dir }}/{{ openbao_package_file }}"
+    checksum: "sha256:{{ openbao_release_base_url }}/{{ openbao_release_checksum_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install pinned OpenBao RPM
+  ansible.builtin.dnf:
+    name: "{{ openbao_package_cache_dir }}/{{ openbao_package_file }}"
+    state: present
+    disable_gpg_check: true

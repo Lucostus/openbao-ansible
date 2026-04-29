@@ -1,0 +1,11 @@
+[Unit]
+Description=Scheduled OpenBao listener certificate renewal
+
+[Timer]
+OnCalendar={{ openbao_acme_renew_on_calendar }}
+Persistent=true
+RandomizedDelaySec=1800
+Unit={{ openbao_acme_renew_service_name }}.service
+
+[Install]
+WantedBy=timers.target

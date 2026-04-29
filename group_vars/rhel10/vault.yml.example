@@ -1,0 +1,26 @@
+---
+# Encrypt the real file with:
+#   ansible-vault encrypt group_vars/rhel10/vault.yml
+
+# Must decode to exactly 32 bytes. Generate with:
+#   openssl rand -base64 32
+openbao_static_unseal_key_b64: "REPLACE_WITH_32_BYTE_BASE64_KEY"
+
+# Production best practice is an offline root CA. This project supports the
+# requested vaulted root CA flow so the intermediate can be signed by Ansible.
+openbao_root_ca_cert_pem: |
+  -----BEGIN CERTIFICATE-----
+  REPLACE_WITH_ROOT_CA_CERTIFICATE
+  -----END CERTIFICATE-----
+
+openbao_root_ca_key_pem: |
+  -----BEGIN PRIVATE KEY-----
+  REPLACE_WITH_ROOT_CA_PRIVATE_KEY
+  -----END PRIVATE KEY-----
+
+# Optional DNS provider environment for lego/certbot/acme.sh DNS-01.
+# Example for Cloudflare with lego:
+# openbao_acme_dns_provider: cloudflare
+# openbao_acme_dns_env:
+#   CLOUDFLARE_DNS_API_TOKEN: "..."
+openbao_acme_dns_env: {}

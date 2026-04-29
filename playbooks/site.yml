@@ -1,0 +1,16 @@
+---
+- name: Deploy OpenBao HA cluster
+  hosts: rhel10
+  become: true
+  gather_facts: true
+  vars:
+    openbao_validate_bootstrap_inputs: true
+  pre_tasks:
+    - name: Load OpenBao variable files
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+  roles:
+    - openbao_common
+    - openbao_server
+    - openbao_bootstrap
+    - openbao_pki
+    - openbao_acme_client
