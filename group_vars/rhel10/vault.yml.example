@@ -17,10 +17,3 @@ openbao_root_ca_key_pem: |
   -----BEGIN PRIVATE KEY-----
   REPLACE_WITH_ROOT_CA_PRIVATE_KEY
   -----END PRIVATE KEY-----
-
-# Optional DNS provider environment for lego/certbot/acme.sh DNS-01.
-# Example for Cloudflare with lego:
-# openbao_acme_dns_provider: cloudflare
-# openbao_acme_dns_env:
-#   CLOUDFLARE_DNS_API_TOKEN: "..."
-openbao_acme_dns_env: {}

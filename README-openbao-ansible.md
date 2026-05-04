@@ -3,7 +3,7 @@
 This repository includes a repo-root Ansible project for a three-node OpenBao
 cluster on RHEL. It deploys OpenBao with integrated Raft storage, TLS, static
 auto-unseal, file audit logging, an internal PKI intermediate, ACME issuance,
-and systemd-based listener certificate renewal.
+and native OpenBao listener ACME renewal backed by a shared NFS cache.
 
 The repository is now scoped to this OpenBao Ansible deployment.
 
@@ -31,11 +31,21 @@ Required values:
 - `openbao_static_unseal_key_b64`: base64 for exactly 32 raw bytes.
 - `openbao_root_ca_cert_pem`: root CA certificate.
 - `openbao_root_ca_key_pem`: root CA key, used to sign the OpenBao intermediate.
-- `openbao_acme_dns_env`: DNS provider credentials when `dns-01` is used.
 
 Place bootstrap TLS files under `files/bootstrap-tls/` using the default names
 documented there. Each node certificate should include both the node direct FQDN
 and the shared `openbao_public_fqdn`.
+
+Set the shared NFS export for the OpenBao listener ACME cache:
+
+```yaml
+openbao_listener_acme_cache_nfs_src: nfs-server.example.com:/exports/openbao-acme
+openbao_listener_acme_tls_alpn_routed: true
+```
+
+The NFS export must be reachable by all three OpenBao nodes. Ansible mounts it
+at `openbao_listener_acme_cache_path` and validates that the `openbao` service
+user can write there.
 
 The OpenBao listener is TLS-enabled by default, so the effective
 `openbao_api_addr`, `openbao_cluster_addr`, and `openbao_cli_addr` defaults use
@@ -49,56 +59,104 @@ addresses to `http://`.
 ansible-galaxy collection install -r requirements.yml
 ```
 
-## Deploy Initial Version
+## Local Docker Lab
 
-The default deployment installs OpenBao `2.4.4`.
+The local lab builds three UBI 10 systemd containers with SSH enabled and an
+HAProxy TCP passthrough load balancer. Generated keys, bootstrap TLS material,
+root CA material, and lab vault variables are written only under ignored paths.
+
+```bash
+scripts/openbao-lab-generate-inputs.sh
+docker compose -f compose.openbao-lab.yml up -d --build
+ansible -i inventory/docker-rhel10.ini rhel10 -m ping \
+  --private-key secure-artifacts/lab/ssh/id_ed25519
+scripts/openbao-lab-playbook.sh site
+curl --resolve bao.lab.local:8443:127.0.0.1 \
+  --cacert secure-artifacts/lab/ca/root-ca.pem \
+  https://bao.lab.local:8443/v1/sys/health
+scripts/openbao-lab-playbook.sh upgrade
+```
+
+On this Apple Silicon Docker host the lab compose file uses `linux/arm64` and
+sets the lab-only `openbao_arch: arm64`, because the UBI 10 `linux/amd64` image
+requires x86-64-v3 CPU features that Docker's current emulation does not expose.
+Production defaults remain unchanged.
+
+To reset the lab containers and Docker volumes back to a fresh state while
+keeping the generated lab CA, SSH key, vault file, and bootstrap TLS inputs:
+
+```bash
+scripts/openbao-lab-reset.sh --start
+scripts/openbao-lab-playbook.sh site
+```
+
+To also regenerate all lab-only inputs:
+
+```bash
+scripts/openbao-lab-reset.sh --all --build
+scripts/openbao-lab-playbook.sh site
+```
+
+## Deploy Desired Version
+
+Set the desired OpenBao version in `group_vars/rhel10/main.yml`:
+
+```yaml
+openbao_version: "2.5.3"
+```
+
+Fresh deployments install that exact version.
 
 ```bash
 ansible-playbook playbooks/site.yml --ask-vault-pass
 ```
 
-Generated bootstrap output and EAB credentials are stored under
-`secure-artifacts/` on the Ansible controller only.
+Generated bootstrap output and reusable EAB artifacts are stored under
+`secure-artifacts/` on the Ansible controller. When listener ACME is active,
+the node-specific EAB values are also rendered into
+`/etc/openbao.d/openbao.hcl`, which is installed as `0640` for `root:openbao`.
 
-## Certificate Renewal
+## Listener ACME
 
-Default renewal mode is:
+Default listener certificate mode is:
 
 ```yaml
-openbao_tls_mode: file_acme
-openbao_acme_client: lego
-openbao_acme_challenge: dns-01
+openbao_tls_mode: listener_acme
+openbao_acme_challenge: tls-alpn-01
+openbao_listener_acme_domains:
+  - "{{ openbao_public_fqdn }}"
 ```
 
-Supported challenge values are `dns-01`, `http-01`, and `tls-alpn-01`. The
-managed external client implementation currently uses `lego`; `certbot` and
-`acme.sh` are reserved variable values for future role extension. Per-node
-renewal requests `openbao_public_fqdn` plus that node's `openbao_node_fqdn`;
-the OpenBao ACME role allows the public FQDN and all node FQDNs.
+The first site run starts OpenBao with the operator-supplied bootstrap TLS
+files, initializes and unseals the cluster, configures PKI ACME and EAB, then
+serially restarts each node into native listener ACME. Later certificate
+renewals are handled by OpenBao itself, using the shared NFS ACME cache.
 
-Run a manual renewal:
-
-```bash
-ansible-playbook playbooks/renew-certs.yml --ask-vault-pass
-```
+The default `tls-alpn-01` challenge assumes the L4 load balancer forwards
+`openbao_public_fqdn:443` to the OpenBao listener and preserves TCP/TLS
+passthrough, including ALPN. Set `openbao_listener_acme_tls_alpn_routed=true`
+only after that routing is in place.
 
 ## Rolling Upgrade
 
-The default target version is OpenBao `2.5.3`.
+To upgrade an existing cluster, change only `openbao_version`, then run the
+rolling upgrade playbook:
 
 ```bash
 ansible-playbook playbooks/upgrade.yml --ask-vault-pass
 ```
 
-The upgrade playbook saves a Raft snapshot, upgrades standby nodes first, then
-the active node, and validates the final version and unsealed state.
+The upgrade playbook reads the running version on every node, rejects
+downgrades, saves a Raft snapshot only when a version change is needed,
+upgrades standby nodes first, then the active node, and validates the desired
+version and unsealed state.
 
 ## Validation
 
 ```bash
 ansible-playbook --syntax-check playbooks/site.yml
 ansible-playbook --syntax-check playbooks/upgrade.yml
-ansible-playbook --syntax-check playbooks/renew-certs.yml
+ansible-inventory --graph
 ```
 
 Optional:

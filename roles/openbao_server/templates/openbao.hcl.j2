@@ -12,9 +12,10 @@ storage "raft" {
 {% if peer != inventory_hostname %}
   retry_join {
     leader_api_addr = "https://{{ hostvars[peer].openbao_node_fqdn }}:{{ openbao_listener_port }}"
+{% if openbao_raft_leader_tls_servername | length > 0 %}
+    leader_tls_servername = "{{ openbao_raft_leader_tls_servername }}"
+{% endif %}
     leader_ca_cert_file = "{{ openbao_ca_cert_file }}"
-    leader_client_cert_file = "{{ openbao_tls_cert_file }}"
-    leader_client_key_file = "{{ openbao_tls_key_file }}"
   }
 
 {% endif %}
@@ -26,15 +27,15 @@ listener "tcp" {
   cluster_address = "{{ openbao_cluster_bind_address }}:{{ openbao_cluster_port }}"
   tls_min_version = "{{ openbao_tls_min_version }}"
   tls_disable_client_certs = {{ openbao_tls_disable_client_certs | bool | lower }}
-{% if openbao_tls_mode == 'listener_acme' %}
+{% if openbao_effective_tls_mode == 'listener_acme' %}
   tls_acme_ca_directory = "{{ openbao_listener_acme_ca_directory }}"
   tls_acme_test_ca_directory = "{{ openbao_listener_acme_test_ca_directory }}"
   tls_acme_cache_path = "{{ openbao_listener_acme_cache_path }}"
   tls_acme_ca_root = "{{ openbao_listener_acme_ca_root }}"
   tls_acme_email = "{{ openbao_listener_acme_email }}"
   tls_acme_domains = {{ openbao_listener_acme_domains | to_json }}
-  tls_acme_eab_key_id = "{{ openbao_listener_acme_eab_key_id }}"
-  tls_acme_eab_mac_key = "{{ openbao_listener_acme_eab_mac_key }}"
+  tls_acme_eab_key_id = "{{ openbao_listener_acme_effective_eab_key_id }}"
+  tls_acme_eab_mac_key = "{{ openbao_listener_acme_effective_eab_mac_key }}"
   tls_acme_disable_http_challenge = {{ (openbao_acme_challenge != 'http-01') | lower }}
   tls_acme_disable_alpn_challenge = {{ (openbao_acme_challenge != 'tls-alpn-01') | lower }}
 {% else %}
@@ -59,6 +60,26 @@ listener "tcp" {
   }
 }
 
+{% if openbao_tls_mode == 'listener_acme' and openbao_listener_acme_bootstrap_api_enabled | bool %}
+listener "tcp" {
+  address = "{{ openbao_listener_acme_bootstrap_api_address }}:{{ openbao_listener_acme_bootstrap_api_port }}"
+  tls_min_version = "{{ openbao_tls_min_version }}"
+  tls_disable_client_certs = {{ openbao_tls_disable_client_certs | bool | lower }}
+  tls_cert_file = "{{ openbao_tls_cert_file }}"
+  tls_key_file = "{{ openbao_tls_key_file }}"
+{% if openbao_x_forwarded_for_authorized_addrs | length > 0 %}
+  x_forwarded_for_authorized_addrs = "{{ openbao_x_forwarded_for_authorized_addrs | join(',') }}"
+  x_forwarded_for_hop_skips = {{ openbao_x_forwarded_for_hop_skips }}
+  x_forwarded_for_reject_not_authorized = {{ openbao_x_forwarded_for_reject_not_authorized | bool | lower }}
+  x_forwarded_for_reject_not_present = {{ openbao_x_forwarded_for_reject_not_present | bool | lower }}
+{% endif %}
+
+  telemetry {
+    unauthenticated_metrics_access = {{ openbao_enable_unauthenticated_metrics | bool | lower }}
+  }
+}
+
+{% endif %}
 {% if openbao_audit_enabled | bool %}
 audit "file" "file" {
   description = "{{ openbao_audit_description }}"

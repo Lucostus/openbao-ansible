@@ -17,6 +17,14 @@
 !/AGENTS.md
 !/files/
 !/files/**
+!/compose.openbao-lab.yml
+!/docker/
+!/docker/**
+!/lab/
+!/lab/**
+!/scripts/
+!/scripts/**
+!/inventory/docker-rhel10.ini
 
 /secure-artifacts/
 /.ansible/

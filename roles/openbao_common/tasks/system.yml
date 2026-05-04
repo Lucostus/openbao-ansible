@@ -12,6 +12,14 @@
       - unzip
     state: present
 
+- name: Install NFS utilities when listener ACME cache uses NFS
+  ansible.builtin.dnf:
+    name: nfs-utils
+    state: present
+  when:
+    - openbao_tls_mode == 'listener_acme'
+    - openbao_listener_acme_cache_mode == 'nfs'
+
 - name: Install firewalld when firewall management is enabled
   ansible.builtin.dnf:
     name: firewalld
@@ -61,9 +69,60 @@
     - { path: "{{ openbao_log_dir }}", mode: "0750" }
     - { path: "{{ openbao_tls_dir }}", mode: "0750" }
     - { path: "{{ openbao_seal_dir }}", mode: "0700" }
-    - { path: "{{ openbao_acme_config_dir }}", mode: "0750" }
     - { path: "{{ openbao_package_cache_dir }}", mode: "0755", owner: root, group: root }
     - { path: "{{ openbao_listener_acme_cache_path }}", mode: "0750" }
+
+- name: Mount shared OpenBao listener ACME cache
+  ansible.posix.mount:
+    path: "{{ openbao_listener_acme_cache_path }}"
+    src: "{{ openbao_listener_acme_cache_nfs_src }}"
+    fstype: "{{ openbao_listener_acme_cache_nfs_fstype }}"
+    opts: "{{ openbao_listener_acme_cache_nfs_opts }}"
+    state: mounted
+  when:
+    - openbao_tls_mode == 'listener_acme'
+    - openbao_listener_acme_cache_mode == 'nfs'
+
+- name: Set shared OpenBao listener ACME cache permissions
+  ansible.builtin.file:
+    path: "{{ openbao_listener_acme_cache_path }}"
+    state: directory
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0750"
+  when: openbao_tls_mode == 'listener_acme'
+
+- name: Confirm shared OpenBao listener ACME cache is mounted
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - --mountpoint
+      - "{{ openbao_listener_acme_cache_path }}"
+  changed_when: false
+  when:
+    - openbao_tls_mode == 'listener_acme'
+    - openbao_listener_acme_cache_mode in ['nfs', 'pre_mounted']
+
+- name: Validate OpenBao can write to shared ACME cache
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - "{{ openbao_service_user }}"
+      - --
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - |
+        import os, pathlib, tempfile
+        cache = pathlib.Path(os.environ["OPENBAO_ACME_CACHE_PATH"])
+        with tempfile.NamedTemporaryFile(dir=cache, prefix=".ansible-openbao-write-", delete=False) as handle:
+            path = pathlib.Path(handle.name)
+            handle.write(b"ok")
+        path.unlink()
+  environment:
+    OPENBAO_ACME_CACHE_PATH: "{{ openbao_listener_acme_cache_path }}"
+  changed_when: false
+  when: openbao_tls_mode == 'listener_acme'
 
 - name: Check audit log file
   ansible.builtin.stat:

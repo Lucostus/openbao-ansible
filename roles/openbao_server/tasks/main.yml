@@ -1,4 +1,78 @@
 ---
+- name: Check listener ACME EAB artifact on controller
+  ansible.builtin.stat:
+    path: "{{ openbao_secure_artifacts_dir }}/{{ inventory_hostname }}-eab.json"
+  delegate_to: localhost
+  become: false
+  register: openbao_server_eab_artifact
+  when: openbao_tls_mode == 'listener_acme'
+
+- name: Read listener ACME EAB artifact
+  ansible.builtin.slurp:
+    src: "{{ openbao_secure_artifacts_dir }}/{{ inventory_hostname }}-eab.json"
+  delegate_to: localhost
+  become: false
+  register: openbao_server_eab_artifact_content
+  no_log: true
+  when:
+    - openbao_tls_mode == 'listener_acme'
+    - openbao_server_eab_artifact.stat.exists | default(false)
+
+- name: Default listener ACME EAB artifact currency
+  ansible.builtin.set_fact:
+    openbao_server_eab_artifact_current: false
+  when: openbao_tls_mode == 'listener_acme'
+
+- name: Check listener ACME EAB artifact matches this host and directory
+  ansible.builtin.set_fact:
+    openbao_server_eab_artifact_current: >-
+      {{
+        ((openbao_server_eab_artifact_content.content | b64decode | from_json).host | default('')) == inventory_hostname
+        and ((openbao_server_eab_artifact_content.content | b64decode | from_json).directory | default('')) == openbao_acme_directory
+      }}
+  no_log: true
+  when:
+    - openbao_tls_mode == 'listener_acme'
+    - openbao_server_eab_artifact.stat.exists | default(false)
+
+- name: Select effective OpenBao listener TLS mode
+  ansible.builtin.set_fact:
+    openbao_effective_tls_mode: >-
+      {{
+        'listener_acme'
+        if (
+          openbao_tls_mode == 'listener_acme'
+          and openbao_server_eab_artifact_current | default(false)
+        )
+        else 'bootstrap_only'
+        if openbao_tls_mode == 'listener_acme'
+        else openbao_tls_mode
+      }}
+
+- name: Set listener ACME EAB configuration facts
+  ansible.builtin.set_fact:
+    openbao_listener_acme_effective_eab_key_id: >-
+      {{
+        (openbao_server_eab_artifact_content.content | b64decode | from_json).key_id
+        | default(openbao_listener_acme_eab_key_id)
+      }}
+    openbao_listener_acme_effective_eab_mac_key: >-
+      {{
+        (openbao_server_eab_artifact_content.content | b64decode | from_json).hmac_key
+        | default(openbao_listener_acme_eab_mac_key)
+      }}
+  no_log: true
+  when: openbao_effective_tls_mode == 'listener_acme'
+
+- name: Assert listener ACME credentials are ready when required
+  ansible.builtin.assert:
+    that:
+      - openbao_effective_tls_mode == 'listener_acme'
+      - openbao_listener_acme_effective_eab_key_id | length > 0
+      - openbao_listener_acme_effective_eab_mac_key | length > 0
+    fail_msg: "Listener ACME convergence requires a current EAB artifact for {{ inventory_hostname }}."
+  when: openbao_require_listener_acme | default(false) | bool
+
 - name: Render OpenBao server configuration
   ansible.builtin.template:
     src: openbao.hcl.j2
@@ -64,6 +138,25 @@
     host: "{{ openbao_node_fqdn }}"
     port: "{{ openbao_listener_port }}"
     timeout: 120
+
+- name: Validate listener ACME certificate for public OpenBao name
+  ansible.builtin.shell: >-
+    timeout 10 openssl s_client
+    -connect {{ (openbao_node_fqdn ~ ':' ~ openbao_listener_port) | quote }}
+    -servername {{ openbao_tls_server_name | quote }}
+    -verify_hostname {{ openbao_tls_server_name | quote }}
+    -CAfile {{ openbao_ca_cert_file | quote }}
+    -verify_return_error
+    -brief
+    < /dev/null
+  register: openbao_listener_acme_cert_check
+  changed_when: false
+  until: openbao_listener_acme_cert_check.rc == 0
+  retries: 12
+  delay: 10
+  when:
+    - openbao_effective_tls_mode == 'listener_acme'
+    - openbao_validate_listener_acme_certificate | default(true) | bool
 
 - name: Reconcile audit log file permissions after OpenBao startup
   ansible.builtin.file:

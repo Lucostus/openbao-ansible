@@ -9,6 +9,52 @@
     - name: Load OpenBao variable files
       ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
   tasks:
+    - name: Read current node status before upgrade
+      ansible.builtin.command: bao status -format=json
+      environment:
+        BAO_ADDR: "{{ openbao_cli_addr }}"
+        VAULT_ADDR: "{{ openbao_cli_addr }}"
+        BAO_CACERT: "{{ openbao_ca_cert_file }}"
+        VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+        BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+        VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+      register: openbao_upgrade_status
+      changed_when: false
+      failed_when: false
+
+    - name: Assert node is reachable and unsealed before upgrade
+      ansible.builtin.assert:
+        that:
+          - openbao_upgrade_status.rc == 0
+          - openbao_upgrade_status.stdout | length > 0
+        fail_msg: "OpenBao must be reachable and unsealed on {{ inventory_hostname }} before a rolling upgrade can start."
+
+    - name: Set current OpenBao status facts
+      ansible.builtin.set_fact:
+        openbao_upgrade_status_data: "{{ openbao_upgrade_status.stdout | from_json }}"
+        openbao_upgrade_current_version: "{{ (openbao_upgrade_status.stdout | from_json).version | default('') }}"
+
+    - name: Assert current OpenBao version is valid for upgrade
+      ansible.builtin.assert:
+        that:
+          - not (openbao_upgrade_status_data.sealed | default(true) | bool)
+          - openbao_upgrade_current_version | length > 0
+        fail_msg: "OpenBao must report an unsealed state and a running version on {{ inventory_hostname }} before upgrade."
+
+    - name: Assert downgrades are not requested
+      ansible.builtin.assert:
+        that:
+          - openbao_upgrade_current_version is version(openbao_version, '<=')
+        fail_msg: >-
+          Downgrades are not supported: {{ inventory_hostname }} is running
+          OpenBao {{ openbao_upgrade_current_version }}, but openbao_version is
+          {{ openbao_version }}.
+
+    - name: Group nodes needing OpenBao version change
+      ansible.builtin.group_by:
+        key: openbao_upgrade_needing_change
+      when: openbao_upgrade_current_version is version(openbao_version, '<')
+
     - name: Read node leader status
       ansible.builtin.command: bao read -format=json sys/leader
       environment:
@@ -16,28 +62,52 @@
         VAULT_ADDR: "{{ openbao_cli_addr }}"
         BAO_CACERT: "{{ openbao_ca_cert_file }}"
         VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+        BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+        VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
       register: openbao_upgrade_leader_status
       changed_when: false
       failed_when: false
 
+    - name: Assert node leader status is readable
+      ansible.builtin.assert:
+        that:
+          - openbao_upgrade_leader_status.rc == 0
+          - openbao_upgrade_leader_status.stdout | length > 0
+        fail_msg: "Could not read OpenBao leader status on {{ inventory_hostname }} before rolling upgrade."
+
+    - name: Set node leadership fact
+      ansible.builtin.set_fact:
+        openbao_upgrade_is_active: "{{ ((openbao_upgrade_leader_status.stdout | from_json).data.is_self | default(false)) | bool }}"
+
     - name: Group standby nodes
       ansible.builtin.group_by:
         key: openbao_upgrade_standby
-      when:
-        - openbao_upgrade_leader_status.rc == 0
-        - not ((openbao_upgrade_leader_status.stdout | from_json).data.is_self | default(false) | bool)
+      when: not (openbao_upgrade_is_active | bool)
 
     - name: Group active nodes
       ansible.builtin.group_by:
         key: openbao_upgrade_active
+      when: openbao_upgrade_is_active | bool
+
+    - name: Group standby nodes needing upgrade
+      ansible.builtin.group_by:
+        key: openbao_upgrade_standby_needing_change
       when:
-        - openbao_upgrade_leader_status.rc == 0
-        - (openbao_upgrade_leader_status.stdout | from_json).data.is_self | default(false) | bool
+        - not (openbao_upgrade_is_active | bool)
+        - openbao_upgrade_current_version is version(openbao_version, '<')
+
+    - name: Group active node needing upgrade
+      ansible.builtin.group_by:
+        key: openbao_upgrade_active_needing_change
+      when:
+        - openbao_upgrade_is_active | bool
+        - openbao_upgrade_current_version is version(openbao_version, '<')
 
     - name: Assert every node was classified for upgrade
       ansible.builtin.assert:
         that:
-          - ((groups.openbao_upgrade_standby | default([])) + (groups.openbao_upgrade_active | default([]))) | unique | length == groups.rhel10 | length
+          - (groups.openbao_upgrade_active | default([])) | length == 1
+          - ((groups.openbao_upgrade_standby | default([])) + (groups.openbao_upgrade_active | default([]))) | unique | length == groups[openbao_cluster_group] | length
         fail_msg: "Could not classify all OpenBao nodes before rolling upgrade."
       run_once: true
 
@@ -49,6 +119,7 @@
       delegate_to: localhost
       become: false
       run_once: true
+      when: (groups.openbao_upgrade_needing_change | default([])) | length > 0
 
     - name: Load init artifact for snapshot token
       ansible.builtin.slurp:
@@ -57,7 +128,10 @@
       become: false
       register: openbao_upgrade_init_artifact
       no_log: true
-      when: openbao_operator_token | length == 0
+      when:
+        - (groups.openbao_upgrade_needing_change | default([])) | length > 0
+        - inventory_hostname in (groups.openbao_upgrade_active | default([]))
+        - openbao_operator_token | length == 0
 
     - name: Set snapshot token
       ansible.builtin.set_fact:
@@ -68,6 +142,9 @@
             else ((openbao_upgrade_init_artifact.content | b64decode | from_json).root_token)
           }}
       no_log: true
+      when:
+        - (groups.openbao_upgrade_needing_change | default([])) | length > 0
+        - inventory_hostname in (groups.openbao_upgrade_active | default([]))
 
     - name: Save Raft snapshot before upgrade
       ansible.builtin.command:
@@ -83,21 +160,27 @@
         VAULT_ADDR: "{{ openbao_cli_addr }}"
         BAO_CACERT: "{{ openbao_ca_cert_file }}"
         VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+        BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+        VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
         BAO_TOKEN: "{{ openbao_snapshot_token }}"
         VAULT_TOKEN: "{{ openbao_snapshot_token }}"
       no_log: true
       changed_when: true
-      when: inventory_hostname in (groups.openbao_upgrade_active | default([]))
+      when:
+        - (groups.openbao_upgrade_needing_change | default([])) | length > 0
+        - inventory_hostname in (groups.openbao_upgrade_active | default([]))
 
     - name: Fetch Raft snapshot to controller
       ansible.builtin.fetch:
         src: "/tmp/{{ openbao_cluster_name }}-pre-upgrade-{{ ansible_facts.date_time.iso8601_basic_short }}.snap"
         dest: "{{ openbao_secure_artifacts_dir }}/"
         flat: true
-      when: inventory_hostname in (groups.openbao_upgrade_active | default([]))
+      when:
+        - (groups.openbao_upgrade_needing_change | default([])) | length > 0
+        - inventory_hostname in (groups.openbao_upgrade_active | default([]))
 
-- name: Upgrade standby nodes first
-  hosts: openbao_upgrade_standby
+- name: Upgrade standby nodes needing version change first
+  hosts: rhel10
   become: true
   gather_facts: true
   serial: 1
@@ -106,15 +189,12 @@
   pre_tasks:
     - name: Load OpenBao variable files
       ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
-
-    - name: Select target OpenBao version
-      ansible.builtin.set_fact:
-        openbao_version: "{{ openbao_target_version }}"
   roles:
-    - openbao_upgrade
+    - role: openbao_upgrade
+      when: inventory_hostname in (groups.openbao_upgrade_standby_needing_change | default([]))
 
-- name: Upgrade active node last
-  hosts: openbao_upgrade_active
+- name: Upgrade active node needing version change last
+  hosts: rhel10
   become: true
   gather_facts: true
   serial: 1
@@ -123,12 +203,9 @@
   pre_tasks:
     - name: Load OpenBao variable files
       ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
-
-    - name: Select target OpenBao version
-      ansible.builtin.set_fact:
-        openbao_version: "{{ openbao_target_version }}"
   roles:
-    - openbao_upgrade
+    - role: openbao_upgrade
+      when: inventory_hostname in (groups.openbao_upgrade_active_needing_change | default([]))
 
 - name: Validate upgraded OpenBao cluster
   hosts: rhel10
@@ -145,12 +222,14 @@
         VAULT_ADDR: "{{ openbao_cli_addr }}"
         BAO_CACERT: "{{ openbao_ca_cert_file }}"
         VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+        BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+        VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
       register: openbao_final_status
       changed_when: false
 
-    - name: Assert target OpenBao version and unsealed state
+    - name: Assert desired OpenBao version and unsealed state
       ansible.builtin.assert:
         that:
           - (openbao_final_status.stdout | from_json).sealed == false
-          - (openbao_final_status.stdout | from_json).version == openbao_target_version
-        fail_msg: "OpenBao did not finish healthy on {{ inventory_hostname }} after upgrade."
+          - (openbao_final_status.stdout | from_json).version == openbao_version
+        fail_msg: "OpenBao did not finish healthy on {{ inventory_hostname }} at desired version {{ openbao_version }}."

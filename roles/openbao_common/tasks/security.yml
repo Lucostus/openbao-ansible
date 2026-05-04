@@ -6,8 +6,7 @@
     immediate: true
     state: enabled
   loop:
-    - "{{ openbao_listener_port }}"
-    - "{{ openbao_cluster_port }}"
+    "{{ [openbao_listener_port, openbao_cluster_port] + ([openbao_listener_acme_bootstrap_api_port] if (openbao_tls_mode == 'listener_acme' and openbao_listener_acme_bootstrap_api_enabled | bool) else []) }}"
   when: openbao_manage_firewalld | bool
 
 - name: Open HTTP challenge port for listener ACME
@@ -18,7 +17,7 @@
     state: enabled
   when:
     - openbao_manage_firewalld | bool
-    - openbao_tls_mode in ['file_acme', 'listener_acme']
+    - openbao_tls_mode == 'listener_acme'
     - openbao_acme_challenge == 'http-01'
 
 - name: Open TLS-ALPN challenge port for listener ACME
@@ -29,7 +28,7 @@
     state: enabled
   when:
     - openbao_manage_firewalld | bool
-    - openbao_tls_mode in ['file_acme', 'listener_acme']
+    - openbao_tls_mode == 'listener_acme'
     - openbao_acme_challenge == 'tls-alpn-01'
 
 - name: Allow SELinux OpenBao ports when SELinux is enforcing

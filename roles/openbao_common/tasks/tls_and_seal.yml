@@ -15,7 +15,7 @@
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
     mode: "0640"
-  when: openbao_tls_mode in ['file_acme', 'bootstrap_only']
+  when: openbao_tls_mode in ['listener_acme', 'bootstrap_only']
 
 - name: Install bootstrap OpenBao listener private key
   ansible.builtin.copy:
@@ -25,7 +25,7 @@
     group: "{{ openbao_service_group }}"
     mode: "0600"
   no_log: true
-  when: openbao_tls_mode in ['file_acme', 'bootstrap_only']
+  when: openbao_tls_mode in ['listener_acme', 'bootstrap_only']
 
 - name: Install static auto-unseal key as raw bytes
   ansible.builtin.command:

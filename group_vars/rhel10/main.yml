@@ -2,13 +2,10 @@
 openbao_cluster_group: rhel10
 openbao_cluster_name: openbao-rhel10
 
-openbao_initial_version: "2.4.4"
-openbao_target_version: "2.5.3"
-openbao_version: "{{ openbao_initial_version }}"
+openbao_version: "2.5.3"
 openbao_arch: amd64
 openbao_package_prefix_overrides:
   "2.4.4": bao
-  "2.5.3": openbao
 openbao_release_base_url: "https://github.com/openbao/openbao/releases/download/v{{ openbao_version }}"
 openbao_release_checksum_file: checksums-linux.txt
 openbao_package_cache_dir: /var/cache/openbao
@@ -21,7 +18,6 @@ openbao_raft_path: /var/lib/openbao/raft
 openbao_log_dir: /var/log/openbao
 openbao_tls_dir: /etc/openbao.d/tls
 openbao_seal_dir: /etc/openbao.d/seal
-openbao_acme_config_dir: /etc/openbao.d/acme
 openbao_static_unseal_key_path: /etc/openbao.d/seal/current.key
 openbao_static_unseal_key_id: "initial-static-key"
 openbao_audit_log_file: /var/log/openbao/audit.log
@@ -41,14 +37,16 @@ openbao_cluster_port: 8201
 openbao_api_addr: "https://{{ openbao_node_fqdn }}:{{ openbao_listener_port }}"
 openbao_cluster_addr: "https://{{ openbao_node_fqdn }}:{{ openbao_cluster_port }}"
 openbao_cli_addr: "https://{{ openbao_node_fqdn }}:{{ openbao_listener_port }}"
+openbao_raft_leader_tls_servername: "{{ openbao_tls_server_name }}"
 openbao_lb_mode: tcp_passthrough
 
-openbao_tls_mode: file_acme
+openbao_tls_mode: listener_acme
 openbao_tls_bootstrap_cert_src: "{{ playbook_dir }}/../files/bootstrap-tls/{{ inventory_hostname }}.fullchain.pem"
 openbao_tls_bootstrap_key_src: "{{ playbook_dir }}/../files/bootstrap-tls/{{ inventory_hostname }}.key.pem"
 openbao_tls_cert_file: "{{ openbao_tls_dir }}/openbao.fullchain.pem"
 openbao_tls_key_file: "{{ openbao_tls_dir }}/openbao.key.pem"
 openbao_ca_cert_file: "{{ openbao_tls_dir }}/root-ca.pem"
+openbao_tls_server_name: "{{ openbao_public_fqdn }}"
 openbao_tls_min_version: tls12
 openbao_tls_disable_client_certs: true
 
@@ -62,16 +60,22 @@ openbao_proxy_protocol_authorized_addrs: []
 openbao_listener_acme_ca_directory: "{{ openbao_acme_directory }}"
 openbao_listener_acme_test_ca_directory: ""
 openbao_listener_acme_cache_path: /var/lib/openbao/certmagic
+openbao_listener_acme_cache_mode: nfs
+openbao_listener_acme_cache_nfs_enabled: true
+openbao_listener_acme_cache_nfs_src: ""
+openbao_listener_acme_cache_nfs_fstype: nfs4
+openbao_listener_acme_cache_nfs_opts: rw,_netdev,hard,noatime
+openbao_listener_acme_bootstrap_api_enabled: false
+openbao_listener_acme_bootstrap_api_address: "0.0.0.0"
+openbao_listener_acme_bootstrap_api_port: 8300
 openbao_listener_acme_ca_root: "{{ openbao_ca_cert_file }}"
 openbao_listener_acme_email: "{{ openbao_acme_email }}"
-openbao_listener_acme_domains: "{{ openbao_acme_allowed_domains }}"
+openbao_listener_acme_domains:
+  - "{{ openbao_public_fqdn }}"
 openbao_listener_acme_eab_key_id: ""
 openbao_listener_acme_eab_mac_key: ""
-openbao_listener_acme_shared_cache_confirmed: false
 openbao_listener_acme_http_routed: false
 openbao_listener_acme_tls_alpn_routed: false
-openbao_file_acme_http_routed: false
-openbao_file_acme_tls_alpn_routed: false
 
 openbao_disable_mlock: true
 openbao_systemd_hardening_enabled: true
@@ -100,25 +104,6 @@ openbao_pki_cluster_path: "{{ openbao_public_api_addr }}/v1/{{ openbao_pki_mount
 openbao_pki_cluster_aia_path: "{{ openbao_public_api_addr }}/v1/{{ openbao_pki_mount }}"
 openbao_acme_role_name: openbao-listener
 openbao_acme_email: openbao-admin@example.com
-openbao_acme_client: lego
-openbao_acme_challenge: dns-01
+openbao_acme_challenge: tls-alpn-01
 openbao_acme_directory: "{{ openbao_public_api_addr }}/v1/{{ openbao_pki_mount }}/roles/{{ openbao_acme_role_name }}/acme/directory"
-openbao_acme_allowed_domains: "{{ ([openbao_public_fqdn] + (groups[openbao_cluster_group] | default([]) | map('extract', hostvars, 'openbao_node_fqdn') | list)) | unique | list }}"
-openbao_acme_certificate_domains: "{{ ([openbao_public_fqdn, openbao_node_fqdn]) | unique | list }}"
-openbao_acme_dns_provider: ""
-openbao_acme_dns_env_file: "{{ openbao_acme_config_dir }}/dns.env"
-openbao_acme_eab_env_file: "{{ openbao_acme_config_dir }}/eab.env"
-openbao_acme_certificate_path: "{{ openbao_tls_cert_file }}"
-openbao_acme_key_path: "{{ openbao_tls_key_file }}"
-openbao_acme_extra_args: []
-openbao_acme_renew_service_name: openbao-renew-listener-cert
-openbao_acme_renew_on_calendar: "*-*-* 03:15:00"
-openbao_run_acme_renewal_now: false
-
-openbao_lego_version: v4.24.0
-openbao_lego_arch: amd64
-openbao_lego_install_dir: /usr/local/bin
-openbao_lego_download_url: "https://github.com/go-acme/lego/releases/download/{{ openbao_lego_version }}/lego_{{ openbao_lego_version | regex_replace('^v', '') }}_linux_{{ openbao_lego_arch }}.tar.gz"
-openbao_lego_checksum: ""
-
-openbao_acme_dns_env: {}
+openbao_acme_allowed_domains: "{{ openbao_listener_acme_domains }}"

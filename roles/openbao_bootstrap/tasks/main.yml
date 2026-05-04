@@ -10,6 +10,8 @@
     VAULT_ADDR: "{{ hostvars[openbao_bootstrap_host].openbao_cli_addr }}"
     BAO_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
     VAULT_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
+    BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+    VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
   delegate_to: "{{ openbao_bootstrap_host }}"
   register: openbao_bootstrap_status
   changed_when: false
@@ -39,6 +41,8 @@
     VAULT_ADDR: "{{ hostvars[openbao_bootstrap_host].openbao_cli_addr }}"
     BAO_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
     VAULT_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
+    BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+    VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
   delegate_to: "{{ openbao_bootstrap_host }}"
   register: openbao_init_result
   changed_when: true
@@ -64,6 +68,8 @@
     VAULT_ADDR: "{{ openbao_cli_addr }}"
     BAO_CACERT: "{{ openbao_ca_cert_file }}"
     VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+    BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+    VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
   register: openbao_node_status
   changed_when: false
   until:
@@ -117,6 +123,8 @@
     VAULT_ADDR: "{{ hostvars[openbao_bootstrap_host].openbao_cli_addr }}"
     BAO_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
     VAULT_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
+    BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+    VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
     BAO_TOKEN: "{{ openbao_bootstrap_token }}"
     VAULT_TOKEN: "{{ openbao_bootstrap_token }}"
   delegate_to: "{{ openbao_bootstrap_host }}"
@@ -143,6 +151,8 @@
     VAULT_ADDR: "{{ hostvars[openbao_bootstrap_host].openbao_cli_addr }}"
     BAO_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
     VAULT_CACERT: "{{ hostvars[openbao_bootstrap_host].openbao_ca_cert_file }}"
+    BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+    VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
     BAO_TOKEN: "{{ openbao_bootstrap_token }}"
     VAULT_TOKEN: "{{ openbao_bootstrap_token }}"
   delegate_to: "{{ openbao_bootstrap_host }}"

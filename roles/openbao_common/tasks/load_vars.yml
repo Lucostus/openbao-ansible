@@ -3,15 +3,23 @@
   ansible.builtin.include_vars:
     file: "{{ playbook_dir }}/../group_vars/rhel10/main.yml"
 
+- name: Set OpenBao secret variable file path
+  ansible.builtin.set_fact:
+    openbao_effective_secret_vars_file: >-
+      {{
+        openbao_secret_vars_file
+        | default(playbook_dir ~ '/../group_vars/rhel10/vault.yml')
+      }}
+
 - name: Check for OpenBao vaulted variables
   ansible.builtin.stat:
-    path: "{{ playbook_dir }}/../group_vars/rhel10/vault.yml"
+    path: "{{ openbao_effective_secret_vars_file }}"
   delegate_to: localhost
   become: false
   register: openbao_common_loaded_vault_vars_stat
 
 - name: Load OpenBao vaulted variables when present
   ansible.builtin.include_vars:
-    file: "{{ playbook_dir }}/../group_vars/rhel10/vault.yml"
+    file: "{{ openbao_effective_secret_vars_file }}"
   no_log: true
   when: openbao_common_loaded_vault_vars_stat.stat.exists

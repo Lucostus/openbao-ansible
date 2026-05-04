@@ -1,4 +1,46 @@
 ---
+- name: Read running OpenBao status before package changes
+  ansible.builtin.command: bao status -format=json
+  environment:
+    BAO_ADDR: "{{ openbao_cli_addr }}"
+    VAULT_ADDR: "{{ openbao_cli_addr }}"
+    BAO_CACERT: "{{ openbao_ca_cert_file }}"
+    VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+    BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+    VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+  register: openbao_upgrade_current_status
+  changed_when: false
+  failed_when: false
+
+- name: Assert OpenBao is reachable before package changes
+  ansible.builtin.assert:
+    that:
+      - openbao_upgrade_current_status.rc == 0
+      - openbao_upgrade_current_status.stdout | length > 0
+    fail_msg: "OpenBao must be reachable and unsealed on {{ inventory_hostname }} before package changes."
+
+- name: Set running OpenBao status facts
+  ansible.builtin.set_fact:
+    openbao_upgrade_current_status_data: "{{ openbao_upgrade_current_status.stdout | from_json }}"
+    openbao_upgrade_current_version: "{{ (openbao_upgrade_current_status.stdout | from_json).version | default('') }}"
+    openbao_target_package_prefix: "{{ openbao_package_prefix_overrides[openbao_version] | default('openbao') }}"
+
+- name: Assert current OpenBao version can converge to desired version
+  ansible.builtin.assert:
+    that:
+      - not (openbao_upgrade_current_status_data.sealed | default(true) | bool)
+      - openbao_upgrade_current_version | length > 0
+      - openbao_upgrade_current_version is version(openbao_version, '<=')
+    fail_msg: >-
+      Cannot converge {{ inventory_hostname }} to OpenBao {{ openbao_version }}.
+      The node is sealed, did not report a version, or is already running newer
+      OpenBao {{ openbao_upgrade_current_version }}; downgrades are not
+      supported.
+
+- name: Set package upgrade requirement
+  ansible.builtin.set_fact:
+    openbao_package_upgrade_required: "{{ openbao_upgrade_current_version is version(openbao_version, '<') }}"
+
 - name: Ensure package cache directory exists
   ansible.builtin.file:
     path: "{{ openbao_package_cache_dir }}"
@@ -6,33 +48,47 @@
     owner: root
     group: root
     mode: "0755"
-
-- name: Set target OpenBao package facts
-  ansible.builtin.set_fact:
-    openbao_target_package_prefix: "{{ openbao_package_prefix_overrides[openbao_version] | default('openbao') }}"
+  when: openbao_package_upgrade_required | bool
 
 - name: Remove legacy OpenBao package names before package-name transition
   ansible.builtin.dnf:
     name: "{{ item }}"
     state: absent
   loop: "{{ openbao_package_prefix_overrides.values() | unique | list }}"
-  when: item != openbao_target_package_prefix
+  register: openbao_legacy_package_removal
+  when:
+    - openbao_package_upgrade_required | bool
+    - item != openbao_target_package_prefix
 
 - name: Install target OpenBao package
   ansible.builtin.include_role:
     name: openbao_common
     tasks_from: install_package
+  when: openbao_package_upgrade_required | bool
+
+- name: Set OpenBao restart requirement after package changes
+  ansible.builtin.set_fact:
+    openbao_upgrade_restart_required: >-
+      {{
+        openbao_package_upgrade_required | bool
+        and (
+          (openbao_legacy_package_removal is defined and openbao_legacy_package_removal is changed)
+          or (openbao_package_install is defined and openbao_package_install is changed)
+        )
+      }}
 
 - name: Restart OpenBao after package upgrade
   ansible.builtin.service:
     name: openbao
     state: restarted
+  when: openbao_upgrade_restart_required | bool
 
 - name: Wait for OpenBao listener after upgrade
   ansible.builtin.wait_for:
     host: "{{ openbao_node_fqdn }}"
     port: "{{ openbao_listener_port }}"
     timeout: 120
+  when: openbao_upgrade_restart_required | bool
 
 - name: Wait for OpenBao health after upgrade
   ansible.builtin.command: bao status -format=json
@@ -41,11 +97,22 @@
     VAULT_ADDR: "{{ openbao_cli_addr }}"
     BAO_CACERT: "{{ openbao_ca_cert_file }}"
     VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+    BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+    VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
   register: openbao_upgrade_node_status
   changed_when: false
+  failed_when: false
   until:
     - openbao_upgrade_node_status.rc == 0
-    - not ((openbao_upgrade_node_status.stdout | from_json).sealed | default(true) | bool)
-    - (openbao_upgrade_node_status.stdout | from_json).version == openbao_target_version
-  retries: 60
+    - not ((openbao_upgrade_node_status.stdout | default('{}', true) | from_json).sealed | default(true) | bool)
+    - (openbao_upgrade_node_status.stdout | default('{}', true) | from_json).version | default('') == openbao_version
+  retries: "{{ (openbao_package_upgrade_required | bool) | ternary(60, 1) }}"
   delay: 5
+
+- name: Assert OpenBao health at desired version
+  ansible.builtin.assert:
+    that:
+      - openbao_upgrade_node_status.rc == 0
+      - not ((openbao_upgrade_node_status.stdout | default('{}', true) | from_json).sealed | default(true) | bool)
+      - (openbao_upgrade_node_status.stdout | default('{}', true) | from_json).version | default('') == openbao_version
+    fail_msg: "OpenBao did not report unsealed state and desired version {{ openbao_version }} on {{ inventory_hostname }}."

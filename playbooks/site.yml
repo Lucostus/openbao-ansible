@@ -13,4 +13,46 @@
     - openbao_server
     - openbao_bootstrap
     - openbao_pki
-    - openbao_acme_client
+
+- name: Converge OpenBao listeners to native ACME
+  hosts: rhel10
+  become: true
+  gather_facts: false
+  serial: 1
+  vars:
+    openbao_validate_bootstrap_inputs: false
+    openbao_require_listener_acme: true
+    openbao_validate_listener_acme_certificate: false
+  pre_tasks:
+    - name: Load OpenBao variable files
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+  roles:
+    - role: openbao_server
+      when: openbao_tls_mode == 'listener_acme'
+
+- name: Validate OpenBao native listener ACME
+  hosts: rhel10
+  become: true
+  gather_facts: false
+  vars:
+    openbao_validate_bootstrap_inputs: false
+  pre_tasks:
+    - name: Load OpenBao variable files
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+  tasks:
+    - name: Validate listener ACME certificate for public OpenBao name
+      ansible.builtin.shell: >-
+        timeout 10 openssl s_client
+        -connect {{ (openbao_node_fqdn ~ ':' ~ openbao_listener_port) | quote }}
+        -servername {{ openbao_tls_server_name | quote }}
+        -verify_hostname {{ openbao_tls_server_name | quote }}
+        -CAfile {{ openbao_ca_cert_file | quote }}
+        -verify_return_error
+        -brief
+        < /dev/null
+      register: openbao_listener_acme_cert_check
+      changed_when: false
+      until: openbao_listener_acme_cert_check.rc == 0
+      retries: 12
+      delay: 10
+      when: openbao_tls_mode == 'listener_acme'

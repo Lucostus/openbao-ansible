@@ -6,9 +6,9 @@ Build a repo-root Ansible project that deploys a three-node OpenBao HA cluster
 on RHEL using integrated Raft storage, TLS, audit logging, static auto-unseal,
 and a configurable external load balancer model.
 
-The default test flow installs OpenBao `2.4.4`, validates the cluster, then
-supports a rolling upgrade to OpenBao `2.5.3`, which was the current latest
-release when this plan was written on April 29, 2026.
+The default desired OpenBao version is `2.5.3`, which was the current latest
+release when this plan was written on April 29, 2026. Operators upgrade by
+changing `openbao_version` and running the rolling upgrade playbook.
 
 ## References
 
@@ -18,7 +18,7 @@ release when this plan was written on April 29, 2026.
 - OpenBao TCP listener and listener ACME documentation
 - OpenBao PKI ACME API documentation
 - OpenBao PKI considerations
-- GitHub releases `v2.4.4` and `v2.5.3`
+- GitHub release `v2.5.3`, plus historical `v2.4.4` package-name compatibility
 
 ## Repository Layout
 
@@ -31,12 +31,10 @@ Add these files at repository root:
 - `group_vars/rhel10/vault.yml.example`
 - `playbooks/site.yml`
 - `playbooks/upgrade.yml`
-- `playbooks/renew-certs.yml`
 - `roles/openbao_common/`
 - `roles/openbao_server/`
 - `roles/openbao_bootstrap/`
 - `roles/openbao_pki/`
-- `roles/openbao_acme_client/`
 - `roles/openbao_upgrade/`
 
 ## Public Variables
@@ -44,8 +42,7 @@ Add these files at repository root:
 Core defaults:
 
 ```yaml
-openbao_initial_version: "2.4.4"
-openbao_target_version: "2.5.3"
+openbao_version: "2.5.3"
 openbao_arch: "amd64"
 openbao_public_fqdn: "bao.example.com"
 openbao_public_api_addr: "https://bao.example.com"
@@ -63,7 +60,6 @@ openbao_root_ca_cert_pem: |
   -----BEGIN CERTIFICATE-----
 openbao_root_ca_key_pem: |
   -----BEGIN PRIVATE KEY-----
-openbao_acme_dns_env: {}
 ```
 
 TLS defaults:
@@ -71,10 +67,10 @@ TLS defaults:
 ```yaml
 openbao_tls_bootstrap_cert_src: "files/bootstrap-tls/{{ inventory_hostname }}.fullchain.pem"
 openbao_tls_bootstrap_key_src: "files/bootstrap-tls/{{ inventory_hostname }}.key.pem"
-openbao_tls_mode: "file_acme"
-openbao_acme_challenge: "dns-01"
-openbao_acme_client: "lego"
+openbao_tls_mode: "listener_acme"
+openbao_acme_challenge: "tls-alpn-01"
 openbao_acme_directory: "{{ openbao_public_api_addr }}/v1/pki_openbao/roles/openbao-listener/acme/directory"
+openbao_listener_acme_cache_nfs_src: "nfs-server:/exports/openbao-acme"
 ```
 
 Important TLS decision: for bootstrap file mode, each node gets one multi-SAN
@@ -100,14 +96,18 @@ use separate listeners and ports explicitly.
    - Confirm static seal key decodes to exactly 32 bytes.
    - Confirm root CA certificate and key are present in vaulted variables.
    - Confirm direct node FQDNs and public or load balancer FQDN are set.
-4. Install exact OpenBao RPMs from GitHub releases with checksum verification:
-   - `2.4.4`: `bao_2.4.4_linux_amd64.rpm`
-   - `2.5.3`: `openbao_2.5.3_linux_amd64.rpm`
+4. Install the exact desired OpenBao RPM from GitHub releases with checksum
+   verification:
+   - Default `2.5.3`: `openbao_2.5.3_linux_amd64.rpm`
+   - Historical `2.4.4` package prefix compatibility:
+     `bao_2.4.4_linux_amd64.rpm`
    - Use `checksums-linux.txt` from the same release.
 5. Configure system:
    - Create `/etc/openbao.d`, `/var/lib/openbao`,
      `/var/lib/openbao/raft`, `/var/log/openbao`,
      `/etc/openbao.d/tls`, and `/etc/openbao.d/seal`.
+   - Mount a shared NFS cache at `openbao_listener_acme_cache_path` for
+     OpenBao listener ACME.
    - Install bootstrap TLS and CA files with restrictive permissions.
    - Open firewall ports `8200/tcp` and `8201/tcp`.
    - Optionally open `443/tcp` or `80/tcp` when listener ACME challenge mode
@@ -151,46 +151,51 @@ use separate listeners and ports explicitly.
    - Enable ACME with `eab_policy=always-required`.
    - Generate per-node EAB credentials and store them as controller-side secure
      artifacts.
+   - Render each node's EAB values into `openbao.hcl` with restrictive file
+     permissions when switching to listener ACME.
 10. Certificate renewal:
-    - Default mode is `file_acme` using `lego` against OpenBao's ACME endpoint.
-    - Default challenge is `dns-01` because it works reliably for shared and
-      direct names behind TCP passthrough.
-    - Install a systemd timer per node to renew the multi-SAN certificate and
-      send `SIGHUP` to OpenBao after successful renewal.
-    - Also support `listener_acme` for OpenBao `2.5.x` with HTTP or
-      TLS-ALPN variables, but fail preflight if shared-domain challenge routing
-      or shared cache is not confirmed.
+    - Default mode is native OpenBao `listener_acme`.
+    - Default challenge is `tls-alpn-01` behind the TCP passthrough load
+      balancer.
+    - Use an Ansible-managed shared NFS mount for the listener ACME cache because
+      OpenBao requires a shared cache when issuing for a shared cluster hostname.
+    - Bootstrap first with operator-supplied TLS files, configure PKI and EAB,
+      then serially restart nodes into listener ACME.
 11. Rolling upgrade:
-    - `playbooks/upgrade.yml` takes a Raft snapshot first.
-    - Upgrade one node at a time with `serial: 1`.
+    - `playbooks/upgrade.yml` reads every node's running version before
+      package changes.
+    - Reject downgrades because they are out of scope.
+    - Take a Raft snapshot only when at least one node needs a version change.
+    - Upgrade one node needing a version change at a time with `serial: 1`.
     - Prefer standby nodes first and active node last.
     - After each node, wait for service, auto-unseal, TLS health, and Raft peer
       health.
     - Final acceptance requires three voters, one active node, two standby
-      nodes, and version `2.5.3`.
+      nodes, and version `openbao_version`.
 
 ## Test And Acceptance Criteria
 
 - `ansible-playbook --syntax-check playbooks/site.yml`
 - `ansible-playbook --syntax-check playbooks/upgrade.yml`
-- `ansible-playbook --syntax-check playbooks/renew-certs.yml`
+- `ansible-inventory --graph`
 - `ansible-lint`
 - `yamllint`
 - Preflight fails clearly for:
   - Missing certificates
   - Bad static seal key
   - Missing root CA
-  - Impossible ACME challenge mode
+  - Missing NFS listener ACME cache export
+  - Impossible ACME challenge mode or unconfirmed TLS-ALPN routing
 - After deploy:
   - All three nodes report initialized and unsealed.
   - Raft has three voting peers.
-  - TLS validates for node FQDNs and shared FQDN.
+  - TLS validates for the shared public FQDN.
   - Audit log exists and receives entries.
   - `pki_openbao` has a signed intermediate and ACME enabled.
   - A test ACME issuance succeeds for a configured node or public name.
 - After upgrade:
   - Cluster remains available during serial upgrade.
-  - Final version is `2.5.3` on all nodes.
+  - Final version is `openbao_version` on all nodes.
   - Raft peers and TLS health remain clean.
 
 ## Assumptions And Defaults
@@ -203,9 +208,8 @@ use separate listeners and ports explicitly.
 - The load balancer itself is not managed by Ansible. The playbook only exposes
   load-balancer-aware variables.
 - DNS names are placeholders until real production names are supplied.
-- Default ACME renewal uses an external ACME client against OpenBao's ACME
-  server. OpenBao still issues its own future listener certificates, while this
-  avoids load-balancer challenge-routing problems.
+- Default ACME renewal is handled by OpenBao's native listener ACME support
+  using a shared NFS cache.
 
 ## ACME Challenge Clarification
 
@@ -215,6 +219,7 @@ OpenBao's PKI ACME server supports these challenge types:
 - `dns-01`
 - `tls-alpn-01`
 
-The Ansible implementation must make the challenge configurable. The default is
-`dns-01`, with `file_acme` and `lego`, because it is the most reliable model
-for a TCP passthrough load balancer and a shared public FQDN.
+The Ansible implementation keeps listener ACME challenge selection configurable
+between `http-01` and `tls-alpn-01`. The default is `tls-alpn-01`, with an
+operator-confirmed L4 passthrough route from `openbao_public_fqdn:443` to the
+OpenBao listener and a shared NFS cache for ACME state.
