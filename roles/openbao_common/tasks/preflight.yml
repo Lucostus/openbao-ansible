@@ -10,6 +10,8 @@
   ansible.builtin.assert:
     that:
       - openbao_tls_mode in ['agent_pki', 'listener_acme', 'bootstrap_only']
+      - openbao_tls_bootstrap_source in ['controller', 'remote']
+      - openbao_tls_bootstrap_source != 'remote' or openbao_tls_mode == 'agent_pki'
       - openbao_acme_challenge in ['http-01', 'tls-alpn-01']
       - openbao_listener_acme_cache_mode in ['nfs', 'pre_mounted']
       - openbao_tls_mode != 'listener_acme' or openbao_acme_enabled | bool
@@ -112,31 +114,8 @@
   run_once: true
   when: openbao_manage_hosts_entries | bool
 
-- name: Check bootstrap certificate on controller
-  ansible.builtin.stat:
-    path: "{{ openbao_tls_bootstrap_cert_src }}"
-  delegate_to: localhost
-  become: false
-  register: openbao_bootstrap_cert_stat
-  when: openbao_tls_mode in ['agent_pki', 'listener_acme', 'bootstrap_only']
-
-- name: Check bootstrap private key on controller
-  ansible.builtin.stat:
-    path: "{{ openbao_tls_bootstrap_key_src }}"
-  delegate_to: localhost
-  become: false
-  register: openbao_bootstrap_key_stat
-  when: openbao_tls_mode in ['agent_pki', 'listener_acme', 'bootstrap_only']
-
-- name: Assert bootstrap TLS files exist
-  ansible.builtin.assert:
-    that:
-      - openbao_bootstrap_cert_stat.stat.exists | default(false)
-      - openbao_bootstrap_key_stat.stat.exists | default(false)
-    fail_msg: >-
-      Missing bootstrap TLS files for {{ inventory_hostname }}. Expected
-      {{ openbao_tls_bootstrap_cert_src }} and {{ openbao_tls_bootstrap_key_src }}.
-  when: openbao_tls_mode in ['agent_pki', 'listener_acme', 'bootstrap_only']
+- name: Resolve bootstrap TLS source inputs
+  ansible.builtin.include_tasks: bootstrap_tls_resolve.yml
 
 - name: Assert static unseal key and root CA variables are present
   ansible.builtin.assert:

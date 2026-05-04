@@ -41,8 +41,29 @@ openbao_raft_leader_tls_servername: "{{ openbao_tls_server_name }}"
 openbao_lb_mode: tcp_passthrough
 
 openbao_tls_mode: agent_pki
+openbao_tls_bootstrap_source: "{{ 'remote' if openbao_tls_mode == 'agent_pki' else 'controller' }}"
 openbao_tls_bootstrap_cert_src: "{{ playbook_dir }}/../files/bootstrap-tls/{{ inventory_hostname }}.fullchain.pem"
 openbao_tls_bootstrap_key_src: "{{ playbook_dir }}/../files/bootstrap-tls/{{ inventory_hostname }}.key.pem"
+openbao_tls_bootstrap_chain_src: ""
+openbao_tls_bootstrap_remote_dir: /usr/local/lib/cockpitcert
+openbao_tls_bootstrap_remote_cert_src: ""
+openbao_tls_bootstrap_remote_key_src: ""
+openbao_tls_bootstrap_remote_cert_candidates:
+  - "{{ openbao_tls_bootstrap_remote_dir }}/fullchain.pem"
+  - "{{ openbao_tls_bootstrap_remote_dir }}/{{ openbao_node_fqdn }}.fullchain.pem"
+  - "{{ openbao_tls_bootstrap_remote_dir }}/{{ inventory_hostname }}.fullchain.pem"
+  - "{{ openbao_tls_bootstrap_remote_dir }}/cert.pem"
+  - "{{ openbao_tls_bootstrap_remote_dir }}/{{ openbao_node_fqdn }}.crt"
+  - "{{ openbao_tls_bootstrap_remote_dir }}/{{ inventory_hostname }}.crt"
+  - "{{ openbao_tls_bootstrap_remote_dir }}/{{ openbao_node_fqdn }}.pem"
+  - "{{ openbao_tls_bootstrap_remote_dir }}/{{ inventory_hostname }}.pem"
+openbao_tls_bootstrap_remote_key_candidates:
+  - "{{ openbao_tls_bootstrap_remote_dir }}/key.pem"
+  - "{{ openbao_tls_bootstrap_remote_dir }}/privkey.pem"
+  - "{{ openbao_tls_bootstrap_remote_dir }}/{{ openbao_node_fqdn }}.key.pem"
+  - "{{ openbao_tls_bootstrap_remote_dir }}/{{ inventory_hostname }}.key.pem"
+  - "{{ openbao_tls_bootstrap_remote_dir }}/{{ openbao_node_fqdn }}.key"
+  - "{{ openbao_tls_bootstrap_remote_dir }}/{{ inventory_hostname }}.key"
 openbao_tls_cert_file: "{{ openbao_tls_dir }}/openbao.fullchain.pem"
 openbao_tls_key_file: "{{ openbao_tls_dir }}/openbao.key.pem"
 openbao_ca_cert_file: "{{ openbao_tls_dir }}/root-ca.pem"

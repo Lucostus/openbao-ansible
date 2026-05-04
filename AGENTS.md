@@ -48,7 +48,10 @@ Preserve these design decisions unless the user changes them:
 - Integrated Raft storage.
 - TCP passthrough load balancer model by default.
 - Static auto-unseal using a 32-byte vaulted key.
-- Bootstrap TLS files supplied by the operator.
+- Bootstrap TLS files supplied by the operator. Default `agent_pki`
+  deployments read first-run cert/key material from each VM under the
+  configured remote cockpit cert path, while controller files under
+  `files/bootstrap-tls/` remain the lab and fallback source.
 - OpenBao PKI intermediate signed with vaulted root CA material.
 - Certificate renewal default: per-node OpenBao Agent PKI issuance with
   OpenBao-managed AppRole credentials.
@@ -97,9 +100,10 @@ it passed.
 
 When continuing this work, check the implementation against these plan items:
 
-- Preflight gives clear failures for missing bootstrap TLS files, invalid static
-  seal key length, missing vaulted root CA material, and impossible ACME
-  challenge selections.
+- Preflight gives clear failures for missing bootstrap TLS files from the
+  selected source, partial listener cert/key pairs, invalid static seal key
+  length, missing vaulted root CA material, and impossible ACME challenge
+  selections.
 - RPM downloads verify against the same release checksum file.
 - OpenBao config validates before restart.
 - Init output, per-node OpenBao Agent AppRole artifacts, and reusable EAB
@@ -122,7 +126,8 @@ Do not invent real production values. Keep these as variables or examples:
 - Static unseal key.
 - Shared NFS export for listener ACME cache when `openbao_tls_mode` is
   `listener_acme`.
-- First-run bootstrap certificates and keys.
+- First-run bootstrap certificates and keys, usually already present on each
+  node under `/usr/local/lib/cockpitcert/` for `agent_pki`.
 - Load balancer configuration.
 
 ## Final Response Style

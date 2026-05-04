@@ -68,6 +68,11 @@ TLS defaults:
 ```yaml
 openbao_tls_bootstrap_cert_src: "files/bootstrap-tls/{{ inventory_hostname }}.fullchain.pem"
 openbao_tls_bootstrap_key_src: "files/bootstrap-tls/{{ inventory_hostname }}.key.pem"
+openbao_tls_bootstrap_source: "{{ 'remote' if openbao_tls_mode == 'agent_pki' else 'controller' }}"
+openbao_tls_bootstrap_remote_dir: /usr/local/lib/cockpitcert
+openbao_tls_bootstrap_remote_cert_src: ""
+openbao_tls_bootstrap_remote_key_src: ""
+openbao_tls_bootstrap_chain_src: ""
 openbao_tls_mode: "agent_pki"
 openbao_agent_cert_dns_names:
   - "{{ openbao_public_fqdn }}"
@@ -96,7 +101,12 @@ use separate listeners and ports explicitly.
 3. Preflight:
    - Confirm exactly three hosts.
    - Confirm RHEL, systemd, firewalld, and SELinux availability.
-   - Confirm bootstrap TLS files exist.
+   - Confirm bootstrap TLS source is valid. Default `agent_pki` uses remote
+     node-local bootstrap certs under `/usr/local/lib/cockpitcert/`; listener
+     ACME and bootstrap-only modes use controller files under
+     `files/bootstrap-tls/`.
+   - Confirm bootstrap TLS files exist only when they are needed. Agent-managed
+     listener files are not overwritten on repeat runs.
    - Confirm static seal key decodes to exactly 32 bytes.
    - Confirm root CA certificate and key are present in vaulted variables.
    - Confirm direct node FQDNs and public or load balancer FQDN are set.
@@ -114,7 +124,9 @@ use separate listeners and ports explicitly.
      listener certificate renewal.
    - Mount a shared NFS cache at `openbao_listener_acme_cache_path` only when
      OpenBao listener ACME is explicitly selected.
-   - Install bootstrap TLS and CA files with restrictive permissions.
+   - Install bootstrap TLS and CA files with restrictive permissions. For
+     remote agent PKI bootstrap, copy the VM-local cert/key into
+     `/etc/openbao.d/tls` without copying private keys back to the controller.
    - Open firewall ports `8200/tcp` and `8201/tcp`.
    - Optionally open `443/tcp` or `80/tcp` when listener ACME challenge mode
      requires them.

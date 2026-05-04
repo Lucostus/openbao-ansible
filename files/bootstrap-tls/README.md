@@ -1,6 +1,17 @@
 # Bootstrap TLS Files
 
-Place first-run listener certificates here before running `playbooks/site.yml`.
+Place first-run listener certificates here when using controller bootstrap TLS
+with:
+
+```yaml
+openbao_tls_bootstrap_source: controller
+```
+
+Default production `agent_pki` deployments instead read bootstrap cert/key
+material from each managed node under `/usr/local/lib/cockpitcert/`, copy it
+once into `/etc/openbao.d/tls`, and then let `openbao-agent` own renewal. This
+directory remains the default source for the local lab and for controller-file
+fallback deployments.
 
 Expected default names:
 

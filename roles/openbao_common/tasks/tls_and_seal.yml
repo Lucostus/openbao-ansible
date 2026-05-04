@@ -8,57 +8,183 @@
     mode: "0644"
   no_log: true
 
-- name: Check current OpenBao listener certificate for agent PKI
-  ansible.builtin.stat:
-    path: "{{ openbao_tls_cert_file }}"
-  register: openbao_agent_current_listener_cert
-  when: openbao_tls_mode == 'agent_pki'
+- name: Resolve bootstrap TLS source inputs
+  ansible.builtin.include_tasks: bootstrap_tls_resolve.yml
 
-- name: Check current OpenBao listener private key for agent PKI
-  ansible.builtin.stat:
-    path: "{{ openbao_tls_key_file }}"
-  register: openbao_agent_current_listener_key
-  no_log: true
-  when: openbao_tls_mode == 'agent_pki'
-
-- name: Assert agent PKI listener TLS files are either both present or both absent
-  ansible.builtin.assert:
-    that:
-      - (openbao_agent_current_listener_cert.stat.exists | default(false)) == (openbao_agent_current_listener_key.stat.exists | default(false))
-    fail_msg: >-
-      openbao_tls_mode=agent_pki found only one of {{ openbao_tls_cert_file }}
-      and {{ openbao_tls_key_file }}. Remove the partial file or restore a
-      matching certificate/key pair before rerunning.
-  when: openbao_tls_mode == 'agent_pki'
-
-- name: Install bootstrap OpenBao listener certificate
+- name: Install controller bootstrap OpenBao listener certificate
   ansible.builtin.copy:
-    src: "{{ openbao_tls_bootstrap_cert_src }}"
+    src: "{{ openbao_tls_bootstrap_effective_cert_src }}"
     dest: "{{ openbao_tls_cert_file }}"
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
     mode: "0640"
-  when: >-
-    openbao_tls_mode in ['listener_acme', 'bootstrap_only']
-    or (
-      openbao_tls_mode == 'agent_pki'
-      and not (openbao_agent_current_listener_cert.stat.exists | default(false))
-    )
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_tls_bootstrap_effective_source | default('') == 'controller'
 
-- name: Install bootstrap OpenBao listener private key
+- name: Install controller bootstrap OpenBao listener private key
   ansible.builtin.copy:
-    src: "{{ openbao_tls_bootstrap_key_src }}"
+    src: "{{ openbao_tls_bootstrap_effective_key_src }}"
     dest: "{{ openbao_tls_key_file }}"
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
     mode: "0600"
   no_log: true
-  when: >-
-    openbao_tls_mode in ['listener_acme', 'bootstrap_only']
-    or (
-      openbao_tls_mode == 'agent_pki'
-      and not (openbao_agent_current_listener_key.stat.exists | default(false))
-    )
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_tls_bootstrap_effective_source | default('') == 'controller'
+
+- name: Install remote bootstrap OpenBao listener certificate
+  ansible.builtin.copy:
+    remote_src: true
+    src: "{{ openbao_tls_bootstrap_effective_cert_src }}"
+    dest: "{{ openbao_tls_cert_file }}"
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0640"
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_tls_bootstrap_effective_source | default('') == 'remote'
+    - openbao_tls_bootstrap_chain_src | length == 0
+
+- name: Read remote bootstrap OpenBao listener certificate
+  ansible.builtin.slurp:
+    src: "{{ openbao_tls_bootstrap_effective_cert_src }}"
+  register: openbao_remote_bootstrap_cert_content
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_tls_bootstrap_effective_source | default('') == 'remote'
+    - openbao_tls_bootstrap_chain_src | length > 0
+
+- name: Install remote bootstrap OpenBao listener certificate with controller-side chain
+  ansible.builtin.copy:
+    content: >-
+      {{
+        (openbao_remote_bootstrap_cert_content.content | b64decode | trim)
+        ~ '\n'
+        ~ (lookup('ansible.builtin.file', openbao_tls_bootstrap_chain_src) | trim)
+        ~ '\n'
+      }}
+    dest: "{{ openbao_tls_cert_file }}"
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0640"
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_tls_bootstrap_effective_source | default('') == 'remote'
+    - openbao_tls_bootstrap_chain_src | length > 0
+
+- name: Install remote bootstrap OpenBao listener private key
+  ansible.builtin.copy:
+    remote_src: true
+    src: "{{ openbao_tls_bootstrap_effective_key_src }}"
+    dest: "{{ openbao_tls_key_file }}"
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0600"
+  no_log: true
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_tls_bootstrap_effective_source | default('') == 'remote'
+
+- name: Validate bootstrap listener certificate parses
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -in
+      - "{{ openbao_tls_cert_file }}"
+      - -noout
+  register: openbao_bootstrap_cert_parse
+  changed_when: false
+  failed_when: openbao_bootstrap_cert_parse.rc != 0
+  when: openbao_bootstrap_tls_install_needed | bool
+
+- name: Validate bootstrap listener private key parses
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - pkey
+      - -in
+      - "{{ openbao_tls_key_file }}"
+      - -noout
+  register: openbao_bootstrap_key_parse
+  changed_when: false
+  failed_when: openbao_bootstrap_key_parse.rc != 0
+  no_log: true
+  when: openbao_bootstrap_tls_install_needed | bool
+
+- name: Validate bootstrap listener certificate and private key match
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cert_hash="$(
+      openssl x509 -in "${OPENBAO_TLS_CERT_FILE}" -pubkey -noout \
+        | openssl pkey -pubin -outform DER \
+        | openssl dgst -sha256 -binary \
+        | openssl base64 -A
+    )"
+    key_hash="$(
+      openssl pkey -in "${OPENBAO_TLS_KEY_FILE}" -pubout -outform DER \
+        | openssl dgst -sha256 -binary \
+        | openssl base64 -A
+    )"
+    test "${cert_hash}" = "${key_hash}"
+  args:
+    executable: /bin/bash
+  environment:
+    OPENBAO_TLS_CERT_FILE: "{{ openbao_tls_cert_file }}"
+    OPENBAO_TLS_KEY_FILE: "{{ openbao_tls_key_file }}"
+  register: openbao_bootstrap_key_match
+  changed_when: false
+  failed_when: openbao_bootstrap_key_match.rc != 0
+  no_log: true
+  when: openbao_bootstrap_tls_install_needed | bool
+
+- name: Validate bootstrap listener certificate chain
+  ansible.builtin.shell: |
+    set -euo pipefail
+    tmpdir="$(mktemp -d)"
+    trap 'rm -rf "${tmpdir}"' EXIT
+    leaf="${tmpdir}/leaf.pem"
+    chain="${tmpdir}/chain.pem"
+    awk -v leaf="${leaf}" -v chain="${chain}" '
+      /-----BEGIN CERTIFICATE-----/ { cert_index++ }
+      cert_index == 1 { print > leaf }
+      cert_index > 1 { print > chain }
+    ' "${OPENBAO_TLS_CERT_FILE}"
+    test -s "${leaf}"
+    if test -s "${chain}"; then
+      openssl verify -CAfile "${OPENBAO_CA_CERT_FILE}" -untrusted "${chain}" "${leaf}"
+    else
+      openssl verify -CAfile "${OPENBAO_CA_CERT_FILE}" "${leaf}"
+    fi
+  args:
+    executable: /bin/bash
+  environment:
+    OPENBAO_TLS_CERT_FILE: "{{ openbao_tls_cert_file }}"
+    OPENBAO_CA_CERT_FILE: "{{ openbao_ca_cert_file }}"
+  register: openbao_bootstrap_chain_verify
+  changed_when: false
+  failed_when: openbao_bootstrap_chain_verify.rc != 0
+  when: openbao_bootstrap_tls_install_needed | bool
+
+- name: Validate bootstrap listener certificate DNS names
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cert_text="$(openssl x509 -in "${OPENBAO_TLS_CERT_FILE}" -noout -text)"
+    for name in "${OPENBAO_PUBLIC_FQDN}" "${OPENBAO_NODE_FQDN}"; do
+      printf '%s\n' "${cert_text}" | grep -F "DNS:${name}" >/dev/null
+    done
+  args:
+    executable: /bin/bash
+  environment:
+    OPENBAO_TLS_CERT_FILE: "{{ openbao_tls_cert_file }}"
+    OPENBAO_PUBLIC_FQDN: "{{ openbao_public_fqdn }}"
+    OPENBAO_NODE_FQDN: "{{ openbao_node_fqdn }}"
+  register: openbao_bootstrap_dns_names
+  changed_when: false
+  failed_when: openbao_bootstrap_dns_names.rc != 0
+  when: openbao_bootstrap_tls_install_needed | bool
 
 - name: Install static auto-unseal key as raw bytes
   ansible.builtin.command:

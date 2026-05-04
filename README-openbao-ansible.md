@@ -15,7 +15,8 @@ The repository is now scoped to this OpenBao Ansible deployment.
   the OpenBao Raft peer IP and node FQDN.
 - `group_vars/rhel10/main.yml` contains non-secret defaults.
 - `group_vars/rhel10/vault.yml.example` shows the required vaulted values.
-- `files/bootstrap-tls/` is where first-run listener certificates are placed.
+- `files/bootstrap-tls/` is the controller-file bootstrap TLS fallback and the
+  default source for the local lab.
 - `secure-artifacts/` is generated locally and intentionally ignored by git.
 
 ## Required Operator Inputs
@@ -33,9 +34,21 @@ Required values:
 - `openbao_root_ca_cert_pem`: root CA certificate.
 - `openbao_root_ca_key_pem`: root CA key, used to sign the OpenBao intermediate.
 
-Place bootstrap TLS files under `files/bootstrap-tls/` using the default names
-documented there. Each node certificate should include both the node direct FQDN
-and the shared `openbao_public_fqdn`.
+Default `agent_pki` deployments expect first-run node listener certificates and
+private keys to already exist on each VM under `/usr/local/lib/cockpitcert/`.
+Ansible copies that remote bootstrap material once into `/etc/openbao.d/tls`;
+the private key is never copied back to or stored on the controller. The remote
+certificate should already be a fullchain unless `openbao_tls_bootstrap_chain_src`
+is set to a controller-side intermediate chain file.
+
+The remote cert/key names are configurable. If explicit paths are not set,
+Ansible checks the ordered candidate lists in `group_vars/rhel10/main.yml`,
+starting with `/usr/local/lib/cockpitcert/fullchain.pem` and
+`/usr/local/lib/cockpitcert/key.pem`.
+
+Controller-side bootstrap TLS files under `files/bootstrap-tls/` remain
+supported by setting `openbao_tls_bootstrap_source: controller`. The local lab
+does this by default.
 
 The OpenBao listener is TLS-enabled by default, so the effective
 `openbao_api_addr`, `openbao_cluster_addr`, and `openbao_cli_addr` defaults use
@@ -120,10 +133,12 @@ openbao_agent_cert_dns_names:
 The first site run starts OpenBao with the operator-supplied bootstrap TLS
 files, initializes and unseals the cluster, configures PKI, creates a
 least-privilege per-node AppRole, then serially starts `openbao-agent` on each
-node. The agent requests a listener certificate from that node's PKI role,
-renders a single bundle, and runs a root-owned hook that validates and splits
-the bundle into `openbao.fullchain.pem` and `openbao.key.pem` before restarting
-OpenBao.
+node. In production defaults, the bootstrap files are copied from remote
+cockpit cert paths on the VM. In controller fallback mode, they are copied from
+`files/bootstrap-tls/`. The agent requests a listener certificate from that
+node's PKI role, renders a single bundle, and runs a root-owned hook that
+validates and splits the bundle into `openbao.fullchain.pem` and
+`openbao.key.pem` before restarting OpenBao.
 
 Agent-issued listener certificates include both the shared public FQDN and the
 node FQDN by default. Renewal does not require NFS, CertMagic, ACME challenge
@@ -155,9 +170,10 @@ only after that routing is in place.
 ## Migrating Certificate Modes
 
 To migrate an existing listener ACME deployment to the default agent-managed
-PKI mode, set `openbao_tls_mode: agent_pki`, keep the bootstrap TLS files
-available, and rerun `playbooks/site.yml`. Ansible removes the managed NFS
-mount from the nodes while preserving the remote export data.
+PKI mode, set `openbao_tls_mode: agent_pki`, make sure each node has its
+bootstrap cert/key available under the configured remote cockpit cert paths,
+and rerun `playbooks/site.yml`. Ansible removes the managed NFS mount from the
+nodes while preserving the remote export data.
 
 To roll back to listener ACME, set `openbao_tls_mode: listener_acme`, restore
 the ACME/NFS variables, and rerun `playbooks/site.yml`.

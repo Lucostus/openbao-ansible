@@ -4,6 +4,7 @@ openbao_arch: arm64
 openbao_public_fqdn: bao.lab.local
 openbao_public_api_addr: https://bao.lab.local:8443
 openbao_tls_mode: agent_pki
+openbao_tls_bootstrap_source: controller
 openbao_pki_cluster_path: "https://{{ openbao_public_fqdn }}:8300/v1/{{ openbao_pki_mount }}"
 openbao_pki_cluster_aia_path: "{{ openbao_public_api_addr }}/v1/{{ openbao_pki_mount }}"
 openbao_acme_directory: "{{ openbao_pki_cluster_path }}/roles/{{ openbao_acme_role_name }}/acme/directory"
