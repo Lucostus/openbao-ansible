@@ -15,7 +15,7 @@ changing `openbao_version` and running the rolling upgrade playbook.
 - OpenBao install documentation
 - OpenBao Raft integrated storage documentation
 - OpenBao static seal documentation
-- OpenBao TCP listener and listener ACME documentation
+- OpenBao TCP listener, listener ACME, and OpenBao Agent documentation
 - OpenBao PKI ACME API documentation
 - OpenBao PKI considerations
 - GitHub release `v2.5.3`, plus historical `v2.4.4` package-name compatibility
@@ -33,6 +33,7 @@ Add these files at repository root:
 - `playbooks/upgrade.yml`
 - `roles/openbao_common/`
 - `roles/openbao_server/`
+- `roles/openbao_agent/`
 - `roles/openbao_bootstrap/`
 - `roles/openbao_pki/`
 - `roles/openbao_upgrade/`
@@ -67,7 +68,10 @@ TLS defaults:
 ```yaml
 openbao_tls_bootstrap_cert_src: "files/bootstrap-tls/{{ inventory_hostname }}.fullchain.pem"
 openbao_tls_bootstrap_key_src: "files/bootstrap-tls/{{ inventory_hostname }}.key.pem"
-openbao_tls_mode: "listener_acme"
+openbao_tls_mode: "agent_pki"
+openbao_agent_cert_dns_names:
+  - "{{ openbao_public_fqdn }}"
+  - "{{ openbao_node_fqdn }}"
 openbao_acme_challenge: "tls-alpn-01"
 openbao_acme_directory: "{{ openbao_public_api_addr }}/v1/pki_openbao/roles/openbao-listener/acme/directory"
 openbao_listener_acme_cache_nfs_src: "nfs-server:/exports/openbao-acme"
@@ -106,8 +110,10 @@ use separate listeners and ports explicitly.
    - Create `/etc/openbao.d`, `/var/lib/openbao`,
      `/var/lib/openbao/raft`, `/var/log/openbao`,
      `/etc/openbao.d/tls`, and `/etc/openbao.d/seal`.
-   - Mount a shared NFS cache at `openbao_listener_acme_cache_path` for
-     OpenBao listener ACME.
+   - Create OpenBao Agent config and state directories for default agent-based
+     listener certificate renewal.
+   - Mount a shared NFS cache at `openbao_listener_acme_cache_path` only when
+     OpenBao listener ACME is explicitly selected.
    - Install bootstrap TLS and CA files with restrictive permissions.
    - Open firewall ports `8200/tcp` and `8201/tcp`.
    - Optionally open `443/tcp` or `80/tcp` when listener ACME challenge mode
@@ -138,7 +144,20 @@ use separate listeners and ports explicitly.
    - Import the signed intermediate back into OpenBao.
    - Configure issuing, CRL, OCSP, and ACME URLs to use
      `openbao_public_api_addr`.
-9. Configure OpenBao ACME:
+9. Configure OpenBao PKI certificate automation:
+   - For default `agent_pki`, create one PKI role, policy, and AppRole per
+     OpenBao node.
+   - Agent PKI roles allow only the shared public FQDN and the node FQDN for
+     that node, server-auth certificates only, EC P-256 keys, `no_store=false`,
+     and `generate_lease=true`.
+   - Store per-node AppRole artifacts only under `secure-artifacts/` on the
+     controller, then install each role ID and secret ID only on its matching
+     node.
+   - Install `openbao-agent` as a systemd service on each node. The agent uses
+     one template call to issue one listener certificate bundle, then a
+     root-owned hook validates and atomically splits it before restarting
+     OpenBao with deterministic per-node jitter.
+10. Configure OpenBao ACME when `openbao_tls_mode=listener_acme`:
    - Tune ACME headers:
      - `Replay-Nonce`
      - `Link`
@@ -153,15 +172,16 @@ use separate listeners and ports explicitly.
      artifacts.
    - Render each node's EAB values into `openbao.hcl` with restrictive file
      permissions when switching to listener ACME.
-10. Certificate renewal:
-    - Default mode is native OpenBao `listener_acme`.
-    - Default challenge is `tls-alpn-01` behind the TCP passthrough load
-      balancer.
-    - Use an Ansible-managed shared NFS mount for the listener ACME cache because
-      OpenBao requires a shared cache when issuing for a shared cluster hostname.
-    - Bootstrap first with operator-supplied TLS files, configure PKI and EAB,
-      then serially restart nodes into listener ACME.
-11. Rolling upgrade:
+11. Certificate renewal:
+    - Default mode is OpenBao Agent PKI renewal with `openbao_tls_mode=agent_pki`.
+    - Each node certificate includes both `openbao_public_fqdn` and that node's
+      `openbao_node_fqdn`.
+    - Native OpenBao listener ACME remains available with `listener_acme`,
+      `tls-alpn-01`, and a shared NFS cache for environments that still want
+      ACME semantics.
+    - Bootstrap first with operator-supplied TLS files, configure PKI and
+      credentials, then serially converge nodes into the selected renewal mode.
+12. Rolling upgrade:
     - `playbooks/upgrade.yml` reads every node's running version before
       package changes.
     - Reject downgrades because they are out of scope.
@@ -184,15 +204,18 @@ use separate listeners and ports explicitly.
   - Missing certificates
   - Bad static seal key
   - Missing root CA
-  - Missing NFS listener ACME cache export
+  - Missing NFS listener ACME cache export when listener ACME is selected
   - Impossible ACME challenge mode or unconfirmed TLS-ALPN routing
 - After deploy:
   - All three nodes report initialized and unsealed.
   - Raft has three voting peers.
   - TLS validates for the shared public FQDN.
   - Audit log exists and receives entries.
-  - `pki_openbao` has a signed intermediate and ACME enabled.
-  - A test ACME issuance succeeds for a configured node or public name.
+  - `pki_openbao` has a signed intermediate.
+  - In default mode, each `openbao-agent` service renders and validates a
+    listener certificate for both the public and node FQDN.
+  - In optional listener ACME mode, ACME is enabled and a test ACME issuance
+    succeeds for a configured node or public name.
 - After upgrade:
   - Cluster remains available during serial upgrade.
   - Final version is `openbao_version` on all nodes.
@@ -208,8 +231,9 @@ use separate listeners and ports explicitly.
 - The load balancer itself is not managed by Ansible. The playbook only exposes
   load-balancer-aware variables.
 - DNS names are placeholders until real production names are supplied.
-- Default ACME renewal is handled by OpenBao's native listener ACME support
-  using a shared NFS cache.
+- Default renewal is handled by per-node OpenBao Agents using the OpenBao PKI
+  secrets engine. Optional listener ACME renewal uses OpenBao's native listener
+  ACME support with a shared NFS cache.
 
 ## ACME Challenge Clarification
 
@@ -220,6 +244,7 @@ OpenBao's PKI ACME server supports these challenge types:
 - `tls-alpn-01`
 
 The Ansible implementation keeps listener ACME challenge selection configurable
-between `http-01` and `tls-alpn-01`. The default is `tls-alpn-01`, with an
-operator-confirmed L4 passthrough route from `openbao_public_fqdn:443` to the
-OpenBao listener and a shared NFS cache for ACME state.
+between `http-01` and `tls-alpn-01` when `openbao_tls_mode=listener_acme`. The
+default deployment path no longer requires ACME challenge routing or shared NFS
+because `openbao_tls_mode=agent_pki` uses authenticated OpenBao Agent PKI
+issuance on each VM.

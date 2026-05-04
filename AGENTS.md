@@ -50,9 +50,10 @@ Preserve these design decisions unless the user changes them:
 - Static auto-unseal using a 32-byte vaulted key.
 - Bootstrap TLS files supplied by the operator.
 - OpenBao PKI intermediate signed with vaulted root CA material.
-- ACME enabled with `eab_policy=always-required`.
-- Certificate renewal default: OpenBao native listener ACME with a shared NFS
-  CertMagic cache and `tls-alpn-01`.
+- Certificate renewal default: per-node OpenBao Agent PKI issuance with
+  OpenBao-managed AppRole credentials.
+- Native listener ACME remains available with `eab_policy=always-required`,
+  a shared NFS CertMagic cache, and `tls-alpn-01` when explicitly selected.
 - ACME challenge must remain configurable across `http-01` and `tls-alpn-01`.
 - Role-qualified EAB tokens must be generated from
   `pki_openbao/roles/openbao-listener/acme/new-eab` because EAB tokens are tied
@@ -101,9 +102,10 @@ When continuing this work, check the implementation against these plan items:
   challenge selections.
 - RPM downloads verify against the same release checksum file.
 - OpenBao config validates before restart.
-- Init output and reusable EAB artifacts are stored under `secure-artifacts/` on
-  the controller; listener ACME EAB values are rendered into root-owned OpenBao
-  config with restrictive permissions.
+- Init output, per-node OpenBao Agent AppRole artifacts, and reusable EAB
+  artifacts are stored under `secure-artifacts/` on the controller; listener
+  ACME EAB values are rendered into root-owned OpenBao config with restrictive
+  permissions only when listener ACME is active.
 - PKI ACME response headers include `Replay-Nonce`, `Link`, `Location`, and
   `Last-Modified`.
 - The upgrade playbook snapshots Raft before changing any node.
@@ -118,7 +120,8 @@ Do not invent real production values. Keep these as variables or examples:
 - Real public or load balancer FQDN.
 - Root CA certificate and private key.
 - Static unseal key.
-- Shared NFS export for listener ACME cache.
+- Shared NFS export for listener ACME cache when `openbao_tls_mode` is
+  `listener_acme`.
 - First-run bootstrap certificates and keys.
 - Load balancer configuration.
 

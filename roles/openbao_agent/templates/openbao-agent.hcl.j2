@@ -1,0 +1,37 @@
+vault {
+  address = "{{ openbao_agent_vault_addr }}"
+  ca_cert = "{{ openbao_ca_cert_file }}"
+  tls_server_name = "{{ openbao_tls_server_name }}"
+
+  retry {
+    num_retries = 12
+  }
+}
+
+auto_auth {
+  method {
+    type = "approle"
+
+    config = {
+      role_id_file_path = "{{ openbao_agent_role_id_path }}"
+      secret_id_file_path = "{{ openbao_agent_secret_id_path }}"
+      remove_secret_id_file_after_reading = false
+    }
+  }
+}
+
+template_config {
+  exit_on_retry_failure = true
+}
+
+template {
+  source = "{{ openbao_agent_bundle_template_path }}"
+  destination = "{{ openbao_agent_bundle_path }}"
+  perms = "0600"
+  backup = false
+
+  exec {
+    command = ["{{ openbao_agent_hook_path }}"]
+    timeout = "{{ openbao_agent_template_command_timeout }}"
+  }
+}

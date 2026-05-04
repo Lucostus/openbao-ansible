@@ -116,3 +116,33 @@
       - not ((openbao_upgrade_node_status.stdout | default('{}', true) | from_json).sealed | default(true) | bool)
       - (openbao_upgrade_node_status.stdout | default('{}', true) | from_json).version | default('') == openbao_version
     fail_msg: "OpenBao did not report unsealed state and desired version {{ openbao_version }} on {{ inventory_hostname }}."
+
+- name: Restart OpenBao agent after package upgrade
+  ansible.builtin.service:
+    name: openbao-agent
+    state: restarted
+  when:
+    - openbao_agent_enabled | bool
+    - openbao_package_upgrade_required | bool
+
+- name: Wait for OpenBao health after OpenBao agent restart
+  ansible.builtin.command: bao status -format=json
+  environment:
+    BAO_ADDR: "{{ openbao_cli_addr }}"
+    VAULT_ADDR: "{{ openbao_cli_addr }}"
+    BAO_CACERT: "{{ openbao_ca_cert_file }}"
+    VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+    BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+    VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+  register: openbao_upgrade_agent_restart_status
+  changed_when: false
+  failed_when: false
+  until:
+    - openbao_upgrade_agent_restart_status.rc == 0
+    - not ((openbao_upgrade_agent_restart_status.stdout | default('{}', true) | from_json).sealed | default(true) | bool)
+    - (openbao_upgrade_agent_restart_status.stdout | default('{}', true) | from_json).version | default('') == openbao_version
+  retries: 36
+  delay: 5
+  when:
+    - openbao_agent_enabled | bool
+    - openbao_package_upgrade_required | bool

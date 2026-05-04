@@ -14,6 +14,20 @@
     - openbao_bootstrap
     - openbao_pki
 
+- name: Converge OpenBao listeners to agent-managed PKI certificates
+  hosts: rhel10
+  become: true
+  gather_facts: false
+  serial: 1
+  vars:
+    openbao_validate_bootstrap_inputs: false
+  pre_tasks:
+    - name: Load OpenBao variable files
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+  roles:
+    - role: openbao_agent
+      when: openbao_agent_enabled | bool
+
 - name: Converge OpenBao listeners to native ACME
   hosts: rhel10
   become: true

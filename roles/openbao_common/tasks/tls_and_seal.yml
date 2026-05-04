@@ -8,6 +8,29 @@
     mode: "0644"
   no_log: true
 
+- name: Check current OpenBao listener certificate for agent PKI
+  ansible.builtin.stat:
+    path: "{{ openbao_tls_cert_file }}"
+  register: openbao_agent_current_listener_cert
+  when: openbao_tls_mode == 'agent_pki'
+
+- name: Check current OpenBao listener private key for agent PKI
+  ansible.builtin.stat:
+    path: "{{ openbao_tls_key_file }}"
+  register: openbao_agent_current_listener_key
+  no_log: true
+  when: openbao_tls_mode == 'agent_pki'
+
+- name: Assert agent PKI listener TLS files are either both present or both absent
+  ansible.builtin.assert:
+    that:
+      - (openbao_agent_current_listener_cert.stat.exists | default(false)) == (openbao_agent_current_listener_key.stat.exists | default(false))
+    fail_msg: >-
+      openbao_tls_mode=agent_pki found only one of {{ openbao_tls_cert_file }}
+      and {{ openbao_tls_key_file }}. Remove the partial file or restore a
+      matching certificate/key pair before rerunning.
+  when: openbao_tls_mode == 'agent_pki'
+
 - name: Install bootstrap OpenBao listener certificate
   ansible.builtin.copy:
     src: "{{ openbao_tls_bootstrap_cert_src }}"
@@ -15,7 +38,12 @@
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
     mode: "0640"
-  when: openbao_tls_mode in ['listener_acme', 'bootstrap_only']
+  when: >-
+    openbao_tls_mode in ['listener_acme', 'bootstrap_only']
+    or (
+      openbao_tls_mode == 'agent_pki'
+      and not (openbao_agent_current_listener_cert.stat.exists | default(false))
+    )
 
 - name: Install bootstrap OpenBao listener private key
   ansible.builtin.copy:
@@ -25,7 +53,12 @@
     group: "{{ openbao_service_group }}"
     mode: "0600"
   no_log: true
-  when: openbao_tls_mode in ['listener_acme', 'bootstrap_only']
+  when: >-
+    openbao_tls_mode in ['listener_acme', 'bootstrap_only']
+    or (
+      openbao_tls_mode == 'agent_pki'
+      and not (openbao_agent_current_listener_key.stat.exists | default(false))
+    )
 
 - name: Install static auto-unseal key as raw bytes
   ansible.builtin.command:

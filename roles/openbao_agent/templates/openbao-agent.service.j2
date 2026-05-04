@@ -1,0 +1,28 @@
+[Unit]
+Description=OpenBao agent for listener certificate renewal
+Documentation=https://openbao.org/docs/
+After=network-online.target openbao.service
+Wants=network-online.target openbao.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/bao agent -config={{ openbao_agent_config_file }}
+ExecReload=/bin/kill --signal HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths={{ openbao_agent_config_dir }} {{ openbao_agent_state_dir }} {{ openbao_tls_dir }} /run /var/run
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

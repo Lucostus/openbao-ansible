@@ -40,7 +40,7 @@ openbao_cli_addr: "https://{{ openbao_node_fqdn }}:{{ openbao_listener_port }}"
 openbao_raft_leader_tls_servername: "{{ openbao_tls_server_name }}"
 openbao_lb_mode: tcp_passthrough
 
-openbao_tls_mode: listener_acme
+openbao_tls_mode: agent_pki
 openbao_tls_bootstrap_cert_src: "{{ playbook_dir }}/../files/bootstrap-tls/{{ inventory_hostname }}.fullchain.pem"
 openbao_tls_bootstrap_key_src: "{{ playbook_dir }}/../files/bootstrap-tls/{{ inventory_hostname }}.key.pem"
 openbao_tls_cert_file: "{{ openbao_tls_dir }}/openbao.fullchain.pem"
@@ -57,6 +57,7 @@ openbao_x_forwarded_for_reject_not_present: false
 openbao_proxy_protocol_behavior: ""
 openbao_proxy_protocol_authorized_addrs: []
 
+openbao_acme_enabled: "{{ openbao_tls_mode == 'listener_acme' }}"
 openbao_listener_acme_ca_directory: "{{ openbao_acme_directory }}"
 openbao_listener_acme_test_ca_directory: ""
 openbao_listener_acme_cache_path: /var/lib/openbao/certmagic
@@ -76,6 +77,37 @@ openbao_listener_acme_eab_key_id: ""
 openbao_listener_acme_eab_mac_key: ""
 openbao_listener_acme_http_routed: false
 openbao_listener_acme_tls_alpn_routed: false
+
+openbao_agent_enabled: "{{ openbao_tls_mode == 'agent_pki' }}"
+openbao_agent_config_dir: /etc/openbao-agent.d
+openbao_agent_state_dir: /var/lib/openbao-agent
+openbao_agent_bundle_path: "{{ openbao_agent_state_dir }}/listener-bundle.pem"
+openbao_agent_bundle_template_path: "{{ openbao_agent_config_dir }}/listener-bundle.ctmpl"
+openbao_agent_config_file: "{{ openbao_agent_config_dir }}/openbao-agent.hcl"
+openbao_agent_hook_path: /usr/local/libexec/openbao-agent-listener-cert-hook
+openbao_agent_vault_addr: "{{ openbao_cli_addr }}"
+openbao_agent_auth_mount: approle
+openbao_agent_role_id_path: "{{ openbao_agent_config_dir }}/role_id"
+openbao_agent_secret_id_path: "{{ openbao_agent_config_dir }}/secret_id"
+openbao_agent_token_period: 24h
+openbao_agent_secret_id_ttl: 0
+openbao_agent_secret_id_num_uses: 0
+openbao_agent_rotate_secret_ids: false
+openbao_agent_secret_id_bound_cidrs: []
+openbao_agent_token_bound_cidrs: []
+openbao_agent_pki_role_prefix: openbao-agent-
+openbao_agent_pki_role_name: "{{ openbao_agent_pki_role_prefix }}{{ inventory_hostname | lower | regex_replace('[^a-z0-9_-]', '-') }}"
+openbao_agent_policy_prefix: openbao-agent-
+openbao_agent_policy_name: "{{ openbao_agent_policy_prefix }}{{ inventory_hostname | lower | regex_replace('[^a-z0-9_-]', '-') }}"
+openbao_agent_cert_common_name: "{{ openbao_public_fqdn }}"
+openbao_agent_cert_dns_names:
+  - "{{ openbao_public_fqdn }}"
+  - "{{ openbao_node_fqdn }}"
+openbao_agent_cert_ip_sans: []
+openbao_agent_cert_ttl: "{{ openbao_pki_leaf_ttl }}"
+openbao_agent_restart_jitter_seconds: "{{ ((groups[openbao_cluster_group] | sort).index(inventory_hostname)) * 60 }}"
+openbao_agent_template_command_timeout: 180s
+openbao_agent_approle_artifact: "{{ openbao_secure_artifacts_dir }}/{{ inventory_hostname }}-agent-approle.json"
 
 openbao_disable_mlock: true
 openbao_systemd_hardening_enabled: true

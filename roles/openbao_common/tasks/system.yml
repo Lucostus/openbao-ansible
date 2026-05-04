@@ -70,7 +70,27 @@
     - { path: "{{ openbao_tls_dir }}", mode: "0750" }
     - { path: "{{ openbao_seal_dir }}", mode: "0700" }
     - { path: "{{ openbao_package_cache_dir }}", mode: "0755", owner: root, group: root }
-    - { path: "{{ openbao_listener_acme_cache_path }}", mode: "0750" }
+
+- name: Create OpenBao listener ACME cache directory
+  ansible.builtin.file:
+    path: "{{ openbao_listener_acme_cache_path }}"
+    state: directory
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0750"
+  when: openbao_tls_mode == 'listener_acme'
+
+- name: Create OpenBao agent directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ openbao_agent_config_dir }}", mode: "0700" }
+    - { path: "{{ openbao_agent_state_dir }}", mode: "0700" }
+  when: openbao_agent_enabled | bool
 
 - name: Mount shared OpenBao listener ACME cache
   ansible.posix.mount:
@@ -81,6 +101,14 @@
     state: mounted
   when:
     - openbao_tls_mode == 'listener_acme'
+    - openbao_listener_acme_cache_mode == 'nfs'
+
+- name: Remove managed OpenBao listener ACME cache mount when ACME is inactive
+  ansible.posix.mount:
+    path: "{{ openbao_listener_acme_cache_path }}"
+    state: absent
+  when:
+    - openbao_tls_mode != 'listener_acme'
     - openbao_listener_acme_cache_mode == 'nfs'
 
 - name: Set shared OpenBao listener ACME cache permissions

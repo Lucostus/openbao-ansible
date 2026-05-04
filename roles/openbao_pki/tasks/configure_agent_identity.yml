@@ -1,0 +1,194 @@
+---
+- name: Set OpenBao agent identity facts for {{ openbao_agent_host }}
+  ansible.builtin.set_fact:
+    openbao_agent_identity_role_name: "{{ hostvars[openbao_agent_host].openbao_agent_pki_role_name }}"
+    openbao_agent_identity_policy_name: "{{ hostvars[openbao_agent_host].openbao_agent_policy_name }}"
+    openbao_agent_identity_artifact: "{{ hostvars[openbao_agent_host].openbao_agent_approle_artifact }}"
+    openbao_agent_identity_cert_common_name: "{{ hostvars[openbao_agent_host].openbao_agent_cert_common_name }}"
+    openbao_agent_identity_cert_dns_names: "{{ hostvars[openbao_agent_host].openbao_agent_cert_dns_names | unique | list }}"
+    openbao_agent_identity_cert_ip_sans: "{{ hostvars[openbao_agent_host].openbao_agent_cert_ip_sans | default([]) | unique | list }}"
+    openbao_agent_identity_cert_ttl: "{{ hostvars[openbao_agent_host].openbao_agent_cert_ttl }}"
+
+- name: Configure OpenBao agent listener certificate role for {{ openbao_agent_host }}
+  ansible.builtin.command:
+    argv: >-
+      {{
+        [
+          'bao',
+          'write',
+          openbao_pki_mount ~ '/roles/' ~ openbao_agent_identity_role_name,
+          'allowed_domains=' ~ (openbao_agent_identity_cert_dns_names | join(',')),
+          'allow_bare_domains=true',
+          'allow_subdomains=false',
+          'allow_glob_domains=false',
+          'allow_wildcard_certificates=false',
+          'allow_ip_sans=' ~ ((openbao_agent_identity_cert_ip_sans | length > 0) | lower),
+          'server_flag=true',
+          'client_flag=false',
+          'no_store=false',
+          'generate_lease=true',
+          'key_type=ec',
+          'key_bits=256',
+          'ttl=' ~ openbao_agent_identity_cert_ttl,
+          'max_ttl=' ~ openbao_pki_leaf_max_ttl
+        ]
+      }}
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  changed_when: false
+  no_log: true
+
+- name: Configure OpenBao agent certificate policy for {{ openbao_agent_host }}
+  ansible.builtin.command:
+    argv:
+      - bao
+      - policy
+      - write
+      - "{{ openbao_agent_identity_policy_name }}"
+      - "-"
+    stdin: |
+      path "{{ openbao_pki_mount }}/issue/{{ openbao_agent_identity_role_name }}" {
+        capabilities = ["update"]
+      }
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  changed_when: false
+  no_log: true
+
+- name: Configure OpenBao agent AppRole for {{ openbao_agent_host }}
+  ansible.builtin.command:
+    argv: >-
+      {{
+        [
+          'bao',
+          'write',
+          'auth/' ~ openbao_agent_auth_mount ~ '/role/' ~ openbao_agent_identity_role_name,
+          'bind_secret_id=true',
+          'secret_id_ttl=' ~ (openbao_agent_secret_id_ttl | string),
+          'secret_id_num_uses=' ~ (openbao_agent_secret_id_num_uses | string),
+          'token_period=' ~ openbao_agent_token_period,
+          'token_policies=' ~ openbao_agent_identity_policy_name
+        ]
+        + (
+          ['secret_id_bound_cidrs=' ~ (openbao_agent_secret_id_bound_cidrs | join(','))]
+          if openbao_agent_secret_id_bound_cidrs | length > 0
+          else []
+        )
+        + (
+          ['token_bound_cidrs=' ~ (openbao_agent_token_bound_cidrs | join(','))]
+          if openbao_agent_token_bound_cidrs | length > 0
+          else []
+        )
+      }}
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  changed_when: false
+  no_log: true
+
+- name: Read OpenBao agent AppRole role ID for {{ openbao_agent_host }}
+  ansible.builtin.command:
+    argv:
+      - bao
+      - read
+      - -format=json
+      - "auth/{{ openbao_agent_auth_mount }}/role/{{ openbao_agent_identity_role_name }}/role-id"
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  register: openbao_agent_role_id_result
+  changed_when: false
+  no_log: true
+
+- name: Set OpenBao agent role ID fact for {{ openbao_agent_host }}
+  ansible.builtin.set_fact:
+    openbao_agent_identity_role_id: "{{ (openbao_agent_role_id_result.stdout | from_json).data.role_id }}"
+  no_log: true
+
+- name: Check OpenBao agent AppRole artifact for {{ openbao_agent_host }}
+  ansible.builtin.stat:
+    path: "{{ openbao_agent_identity_artifact }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_agent_identity_artifact_stat
+
+- name: Read OpenBao agent AppRole artifact for {{ openbao_agent_host }}
+  ansible.builtin.slurp:
+    src: "{{ openbao_agent_identity_artifact }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_agent_identity_artifact_content
+  no_log: true
+  when: openbao_agent_identity_artifact_stat.stat.exists
+
+- name: Set OpenBao agent AppRole artifact facts for {{ openbao_agent_host }}
+  ansible.builtin.set_fact:
+    openbao_agent_identity_artifact_data: >-
+      {{
+        (openbao_agent_identity_artifact_content.content | b64decode | from_json)
+        if openbao_agent_identity_artifact_stat.stat.exists
+        else {}
+      }}
+    openbao_agent_identity_cert_name_fingerprint: >-
+      {{
+        {
+          'dns_names': openbao_agent_identity_cert_dns_names,
+          'ip_sans': openbao_agent_identity_cert_ip_sans
+        } | to_json | hash('sha256')
+      }}
+  no_log: true
+
+- name: Determine OpenBao agent AppRole artifact currency for {{ openbao_agent_host }}
+  ansible.builtin.set_fact:
+    openbao_agent_identity_artifact_current: >-
+      {{
+        (not (openbao_agent_rotate_secret_ids | bool))
+        and openbao_agent_identity_artifact_stat.stat.exists
+        and (openbao_agent_identity_artifact_data.cluster_id | default('')) == openbao_pki_cluster_id
+        and (openbao_agent_identity_artifact_data.host | default('')) == openbao_agent_host
+        and (openbao_agent_identity_artifact_data.auth_mount | default('')) == openbao_agent_auth_mount
+        and (openbao_agent_identity_artifact_data.role_name | default('')) == openbao_agent_identity_role_name
+        and (openbao_agent_identity_artifact_data.policy_name | default('')) == openbao_agent_identity_policy_name
+        and (openbao_agent_identity_artifact_data.role_id | default('')) == openbao_agent_identity_role_id
+        and (openbao_agent_identity_artifact_data.cert_name_fingerprint | default('')) == openbao_agent_identity_cert_name_fingerprint
+      }}
+  no_log: true
+
+- name: Generate OpenBao agent AppRole secret ID for {{ openbao_agent_host }}
+  ansible.builtin.command:
+    argv:
+      - bao
+      - write
+      - -format=json
+      - "auth/{{ openbao_agent_auth_mount }}/role/{{ openbao_agent_identity_role_name }}/secret-id"
+      - "metadata={{ {'host': openbao_agent_host, 'role_name': openbao_agent_identity_role_name} | to_json }}"
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  register: openbao_agent_secret_id_result
+  changed_when: true
+  no_log: true
+  when: not (openbao_agent_identity_artifact_current | bool)
+
+- name: Store OpenBao agent AppRole artifact for {{ openbao_agent_host }}
+  ansible.builtin.copy:
+    content: >-
+      {{
+        {
+          'host': openbao_agent_host,
+          'cluster_id': openbao_pki_cluster_id,
+          'auth_mount': openbao_agent_auth_mount,
+          'role_name': openbao_agent_identity_role_name,
+          'policy_name': openbao_agent_identity_policy_name,
+          'role_id': openbao_agent_identity_role_id,
+          'secret_id': (openbao_agent_secret_id_result.stdout | from_json).data.secret_id,
+          'secret_id_accessor': (openbao_agent_secret_id_result.stdout | from_json).data.secret_id_accessor,
+          'cert_common_name': openbao_agent_identity_cert_common_name,
+          'cert_dns_names': openbao_agent_identity_cert_dns_names,
+          'cert_ip_sans': openbao_agent_identity_cert_ip_sans,
+          'cert_name_fingerprint': openbao_agent_identity_cert_name_fingerprint
+        } | to_nice_json
+      }}
+    dest: "{{ openbao_agent_identity_artifact }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  no_log: true
+  when: not (openbao_agent_identity_artifact_current | bool)

@@ -2,8 +2,9 @@
 
 This repository includes a repo-root Ansible project for a three-node OpenBao
 cluster on RHEL. It deploys OpenBao with integrated Raft storage, TLS, static
-auto-unseal, file audit logging, an internal PKI intermediate, ACME issuance,
-and native OpenBao listener ACME renewal backed by a shared NFS cache.
+auto-unseal, file audit logging, an internal PKI intermediate, and per-node
+OpenBao Agent listener certificate renewal. Native listener ACME with a shared
+cache remains available as an explicit fallback mode.
 
 The repository is now scoped to this OpenBao Ansible deployment.
 
@@ -35,17 +36,6 @@ Required values:
 Place bootstrap TLS files under `files/bootstrap-tls/` using the default names
 documented there. Each node certificate should include both the node direct FQDN
 and the shared `openbao_public_fqdn`.
-
-Set the shared NFS export for the OpenBao listener ACME cache:
-
-```yaml
-openbao_listener_acme_cache_nfs_src: nfs-server.example.com:/exports/openbao-acme
-openbao_listener_acme_tls_alpn_routed: true
-```
-
-The NFS export must be reachable by all three OpenBao nodes. Ansible mounts it
-at `openbao_listener_acme_cache_path` and validates that the `openbao` service
-user can write there.
 
 The OpenBao listener is TLS-enabled by default, so the effective
 `openbao_api_addr`, `openbao_cluster_addr`, and `openbao_cli_addr` defaults use
@@ -111,31 +101,66 @@ Fresh deployments install that exact version.
 ansible-playbook playbooks/site.yml --ask-vault-pass
 ```
 
-Generated bootstrap output and reusable EAB artifacts are stored under
-`secure-artifacts/` on the Ansible controller. When listener ACME is active,
-the node-specific EAB values are also rendered into
-`/etc/openbao.d/openbao.hcl`, which is installed as `0640` for `root:openbao`.
+Generated bootstrap output and reusable per-node OpenBao Agent AppRole
+artifacts are stored under `secure-artifacts/` on the Ansible controller.
+Those artifacts are installed only on their matching nodes as root-owned
+`role_id` and `secret_id` files for the local `openbao-agent` service.
 
-## Listener ACME
+## Agent PKI Renewal
 
 Default listener certificate mode is:
 
 ```yaml
-openbao_tls_mode: listener_acme
-openbao_acme_challenge: tls-alpn-01
-openbao_listener_acme_domains:
+openbao_tls_mode: agent_pki
+openbao_agent_cert_dns_names:
   - "{{ openbao_public_fqdn }}"
+  - "{{ openbao_node_fqdn }}"
 ```
 
 The first site run starts OpenBao with the operator-supplied bootstrap TLS
-files, initializes and unseals the cluster, configures PKI ACME and EAB, then
-serially restarts each node into native listener ACME. Later certificate
-renewals are handled by OpenBao itself, using the shared NFS ACME cache.
+files, initializes and unseals the cluster, configures PKI, creates a
+least-privilege per-node AppRole, then serially starts `openbao-agent` on each
+node. The agent requests a listener certificate from that node's PKI role,
+renders a single bundle, and runs a root-owned hook that validates and splits
+the bundle into `openbao.fullchain.pem` and `openbao.key.pem` before restarting
+OpenBao.
+
+Agent-issued listener certificates include both the shared public FQDN and the
+node FQDN by default. Renewal does not require NFS, CertMagic, ACME challenge
+routing, or an external ACME client.
+
+## Optional Listener ACME
+
+Native listener ACME is still available when explicitly selected:
+
+```yaml
+openbao_tls_mode: listener_acme
+openbao_acme_challenge: tls-alpn-01
+openbao_listener_acme_cache_nfs_src: nfs-server.example.com:/exports/openbao-acme
+openbao_listener_acme_tls_alpn_routed: true
+```
+
+When listener ACME is active, generated EAB artifacts are stored under
+`secure-artifacts/` and node-specific EAB values are rendered into
+`/etc/openbao.d/openbao.hcl`, installed as `0640` for `root:openbao`. The NFS
+export must be reachable by all three OpenBao nodes; Ansible mounts it at
+`openbao_listener_acme_cache_path` and validates that the `openbao` service user
+can write there.
 
 The default `tls-alpn-01` challenge assumes the L4 load balancer forwards
 `openbao_public_fqdn:443` to the OpenBao listener and preserves TCP/TLS
 passthrough, including ALPN. Set `openbao_listener_acme_tls_alpn_routed=true`
 only after that routing is in place.
+
+## Migrating Certificate Modes
+
+To migrate an existing listener ACME deployment to the default agent-managed
+PKI mode, set `openbao_tls_mode: agent_pki`, keep the bootstrap TLS files
+available, and rerun `playbooks/site.yml`. Ansible removes the managed NFS
+mount from the nodes while preserving the remote export data.
+
+To roll back to listener ACME, set `openbao_tls_mode: listener_acme`, restore
+the ACME/NFS variables, and rerun `playbooks/site.yml`.
 
 ## Rolling Upgrade
 

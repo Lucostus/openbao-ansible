@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+import fcntl
+import grp
+import os
+import pathlib
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+BUNDLE_PATH = pathlib.Path("{{ openbao_agent_bundle_path }}")
+TLS_DIR = pathlib.Path("{{ openbao_tls_dir }}")
+CERT_FILE = pathlib.Path("{{ openbao_tls_cert_file }}")
+KEY_FILE = pathlib.Path("{{ openbao_tls_key_file }}")
+CA_FILE = pathlib.Path("{{ openbao_ca_cert_file }}")
+CONFIG_FILE = pathlib.Path("{{ openbao_config_dir }}/openbao.hcl")
+LOCK_FILE = pathlib.Path("{{ openbao_agent_state_dir }}/listener-cert-hook.lock")
+PUBLIC_FQDN = "{{ openbao_public_fqdn }}"
+NODE_FQDN = "{{ openbao_node_fqdn }}"
+SERVICE_GROUP = "{{ openbao_service_group }}"
+JITTER_SECONDS = {{ openbao_agent_restart_jitter_seconds | int }}
+
+
+def fail(message):
+    print(message, file=sys.stderr)
+    sys.exit(1)
+
+
+def run(argv, input_text=None):
+    result = subprocess.run(
+        argv,
+        input=input_text,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        fail("{} failed: {}".format(" ".join(argv), result.stderr.strip()))
+    return result.stdout
+
+
+def read_text(path):
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def write_temp(directory, prefix, content, mode):
+    handle = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=directory,
+        prefix=prefix,
+        delete=False,
+    )
+    path = pathlib.Path(handle.name)
+    try:
+        with handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        path.chmod(mode)
+        return path
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def pem_blocks(pattern, content):
+    return [match.group(0).strip() + "\n" for match in re.finditer(pattern, content, re.DOTALL)]
+
+
+def public_key_from_cert(path):
+    return run(["openssl", "x509", "-in", str(path), "-pubkey", "-noout"])
+
+
+def public_key_from_private_key(path):
+    return run(["openssl", "pkey", "-in", str(path), "-pubout"])
+
+
+def verify_hostname(hostname, leaf_path, chain_path):
+    argv = ["openssl", "verify", "-CAfile", str(CA_FILE)]
+    if chain_path is not None:
+        argv.extend(["-untrusted", str(chain_path)])
+    argv.extend(["-verify_hostname", hostname, str(leaf_path)])
+    run(argv)
+
+
+def install_atomically(source, destination, mode, uid, gid):
+    os.chown(source, uid, gid)
+    source.chmod(mode)
+    os.replace(source, destination)
+    os.chown(destination, uid, gid)
+    destination.chmod(mode)
+
+
+def main():
+    if not shutil.which("openssl"):
+        fail("openssl is required for listener certificate validation")
+    if not shutil.which("bao"):
+        fail("bao is required for OpenBao config validation")
+    if not shutil.which("systemctl"):
+        fail("systemctl is required to restart OpenBao")
+
+    TLS_DIR.mkdir(parents=True, exist_ok=True)
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    with LOCK_FILE.open("w", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+
+        bundle = read_text(BUNDLE_PATH)
+        if not bundle.strip():
+            fail("{} is empty".format(BUNDLE_PATH))
+
+        key_matches = pem_blocks(
+            r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+            bundle,
+        )
+        cert_matches = pem_blocks(
+            r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+            bundle,
+        )
+        deduped_cert_matches = []
+        seen_certs = set()
+        for cert in cert_matches:
+            if cert not in seen_certs:
+                deduped_cert_matches.append(cert)
+                seen_certs.add(cert)
+        cert_matches = deduped_cert_matches
+
+        if len(key_matches) != 1:
+            fail("expected exactly one private key in {}".format(BUNDLE_PATH))
+        if len(cert_matches) < 1:
+            fail("expected at least one certificate in {}".format(BUNDLE_PATH))
+
+        key_pem = key_matches[0]
+        fullchain_pem = "".join(cert_matches)
+        leaf_pem = cert_matches[0]
+        chain_pem = "".join(cert_matches[1:])
+
+        key_tmp = write_temp(TLS_DIR, ".openbao-agent-key-", key_pem, 0o640)
+        cert_tmp = write_temp(TLS_DIR, ".openbao-agent-cert-", fullchain_pem, 0o644)
+        leaf_tmp = write_temp(TLS_DIR, ".openbao-agent-leaf-", leaf_pem, 0o644)
+        chain_tmp = None
+        try:
+            if chain_pem.strip():
+                chain_tmp = write_temp(TLS_DIR, ".openbao-agent-chain-", chain_pem, 0o644)
+
+            if public_key_from_cert(leaf_tmp) != public_key_from_private_key(key_tmp):
+                fail("listener certificate public key does not match private key")
+
+            for hostname in sorted(set([PUBLIC_FQDN, NODE_FQDN])):
+                verify_hostname(hostname, leaf_tmp, chain_tmp)
+
+            uid = pwd.getpwnam("root").pw_uid
+            gid = grp.getgrnam(SERVICE_GROUP).gr_gid
+
+            if read_text(CERT_FILE) == fullchain_pem and read_text(KEY_FILE) == key_pem:
+                os.chown(CERT_FILE, uid, gid)
+                CERT_FILE.chmod(0o644)
+                os.chown(KEY_FILE, uid, gid)
+                KEY_FILE.chmod(0o640)
+                return
+
+            install_atomically(cert_tmp, CERT_FILE, 0o644, uid, gid)
+            cert_tmp = None
+            install_atomically(key_tmp, KEY_FILE, 0o640, uid, gid)
+            key_tmp = None
+
+            run(["bao", "operator", "validate-config", "-config={}".format(CONFIG_FILE)])
+
+            if JITTER_SECONDS > 0:
+                time.sleep(JITTER_SECONDS)
+            run(["systemctl", "restart", "openbao.service"])
+        finally:
+            for path in [key_tmp, cert_tmp, leaf_tmp, chain_tmp]:
+                if path is not None:
+                    path.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    main()

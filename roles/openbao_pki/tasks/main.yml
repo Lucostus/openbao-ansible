@@ -53,6 +53,15 @@
     openbao_pki_cluster_id: "{{ (openbao_pki_cluster_status.stdout | from_json).cluster_id }}"
   run_once: true
 
+- name: Ensure secure artifact directory exists on controller
+  ansible.builtin.file:
+    path: "{{ openbao_secure_artifacts_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
 - name: Read existing audit devices
   ansible.builtin.command: bao audit list -format=json
   environment: "{{ openbao_pki_environment }}"
@@ -183,6 +192,7 @@
   changed_when: false
   no_log: true
   run_once: true
+  when: openbao_acme_enabled | bool
 
 - name: Enable ACME with external account binding
   ansible.builtin.command:
@@ -199,6 +209,7 @@
   changed_when: false
   no_log: true
   run_once: true
+  when: openbao_acme_enabled | bool
 
 - name: Read listener ACME PKI role
   ansible.builtin.command:
@@ -213,6 +224,7 @@
   changed_when: false
   no_log: true
   run_once: true
+  when: openbao_acme_enabled | bool
 
 - name: Assert listener ACME PKI role is configured
   ansible.builtin.assert:
@@ -222,6 +234,7 @@
       - (openbao_pki_acme_role_check.stdout | from_json).data.server_flag | bool
     fail_msg: "OpenBao listener ACME PKI role is not configured for {{ openbao_public_fqdn }}."
   run_once: true
+  when: openbao_acme_enabled | bool
 
 - name: Read OpenBao ACME configuration
   ansible.builtin.command:
@@ -236,6 +249,7 @@
   changed_when: false
   no_log: true
   run_once: true
+  when: openbao_acme_enabled | bool
 
 - name: Assert OpenBao ACME configuration is enabled with EAB
   ansible.builtin.assert:
@@ -245,6 +259,7 @@
       - openbao_acme_role_name in (((openbao_pki_acme_config_check.stdout | from_json).data.allowed_roles | default([])) | string)
     fail_msg: "OpenBao ACME config must be enabled with eab_policy=always-required for {{ openbao_acme_role_name }}."
   run_once: true
+  when: openbao_acme_enabled | bool
 
 - name: Create missing EAB credentials for each OpenBao node
   ansible.builtin.include_tasks: create_eab.yml
@@ -252,6 +267,7 @@
   loop_control:
     loop_var: openbao_eab_host
   run_once: true
+  when: openbao_acme_enabled | bool
 
 - name: Check EAB artifacts for each OpenBao node
   ansible.builtin.stat:
@@ -261,6 +277,7 @@
   loop: "{{ groups[openbao_cluster_group] }}"
   register: openbao_pki_eab_artifacts
   run_once: true
+  when: openbao_acme_enabled | bool
 
 - name: Assert EAB artifacts exist for every OpenBao node
   ansible.builtin.assert:
@@ -268,3 +285,54 @@
       - openbao_pki_eab_artifacts.results | map(attribute='stat.exists') | select('equalto', true) | list | length == groups[openbao_cluster_group] | length
     fail_msg: "Every OpenBao node needs a controller-side EAB artifact before listener ACME convergence."
   run_once: true
+  when: openbao_acme_enabled | bool
+
+- name: Read enabled auth methods
+  ansible.builtin.command:
+    argv:
+      - bao
+      - auth
+      - list
+      - -format=json
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  register: openbao_auth_methods
+  changed_when: false
+  no_log: true
+  run_once: true
+  when: openbao_agent_enabled | bool
+
+- name: Assert OpenBao agent auth mount is AppRole when present
+  ansible.builtin.assert:
+    that:
+      - ((openbao_auth_methods.stdout | from_json)[openbao_agent_auth_mount ~ '/'].type | default('')) == 'approle'
+    fail_msg: "Auth mount {{ openbao_agent_auth_mount }}/ already exists but is not AppRole."
+  run_once: true
+  when:
+    - openbao_agent_enabled | bool
+    - (openbao_agent_auth_mount ~ '/') in ((openbao_auth_methods.stdout | from_json).keys() | list)
+
+- name: Enable AppRole auth method for OpenBao agents
+  ansible.builtin.command:
+    argv:
+      - bao
+      - auth
+      - enable
+      - "-path={{ openbao_agent_auth_mount }}"
+      - approle
+  environment: "{{ openbao_pki_environment }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  changed_when: true
+  no_log: true
+  run_once: true
+  when:
+    - openbao_agent_enabled | bool
+    - (openbao_agent_auth_mount ~ '/') not in ((openbao_auth_methods.stdout | from_json).keys() | list)
+
+- name: Configure per-node OpenBao agent PKI identities
+  ansible.builtin.include_tasks: configure_agent_identity.yml
+  loop: "{{ groups[openbao_cluster_group] }}"
+  loop_control:
+    loop_var: openbao_agent_host
+  run_once: true
+  when: openbao_agent_enabled | bool

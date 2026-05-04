@@ -9,9 +9,10 @@
 - name: Assert supported OpenBao deployment options
   ansible.builtin.assert:
     that:
-      - openbao_tls_mode in ['listener_acme', 'bootstrap_only']
+      - openbao_tls_mode in ['agent_pki', 'listener_acme', 'bootstrap_only']
       - openbao_acme_challenge in ['http-01', 'tls-alpn-01']
       - openbao_listener_acme_cache_mode in ['nfs', 'pre_mounted']
+      - openbao_tls_mode != 'listener_acme' or openbao_acme_enabled | bool
       - openbao_lb_mode in ['tcp_passthrough', 'tls_termination', 'none']
       - openbao_public_fqdn | length > 0
       - openbao_node_fqdn | length > 0
@@ -56,6 +57,32 @@
     - openbao_tls_mode == 'listener_acme'
     - openbao_listener_acme_cache_mode == 'pre_mounted'
 
+- name: Assert OpenBao agent PKI settings are valid
+  ansible.builtin.assert:
+    that:
+      - openbao_agent_enabled | bool
+      - openbao_agent_config_dir is match('^/')
+      - openbao_agent_state_dir is match('^/')
+      - openbao_agent_bundle_path is match('^/')
+      - openbao_agent_bundle_template_path is match('^/')
+      - openbao_agent_config_file is match('^/')
+      - openbao_agent_hook_path is match('^/')
+      - openbao_agent_role_id_path is match('^/')
+      - openbao_agent_secret_id_path is match('^/')
+      - openbao_agent_auth_mount | length > 0
+      - "'/' not in openbao_agent_auth_mount"
+      - openbao_agent_pki_role_name | length > 0
+      - openbao_agent_policy_name | length > 0
+      - openbao_agent_cert_common_name | length > 0
+      - openbao_agent_cert_dns_names | unique | length == openbao_agent_cert_dns_names | length
+      - openbao_public_fqdn in openbao_agent_cert_dns_names
+      - openbao_node_fqdn in openbao_agent_cert_dns_names
+      - openbao_agent_cert_common_name in openbao_agent_cert_dns_names
+      - openbao_agent_cert_ttl | length > 0
+      - openbao_agent_restart_jitter_seconds | int >= 0
+    fail_msg: "openbao_tls_mode=agent_pki has invalid OpenBao Agent certificate settings."
+  when: openbao_tls_mode == 'agent_pki'
+
 - name: Assert RHEL-like systemd host
   ansible.builtin.assert:
     that:
@@ -91,7 +118,7 @@
   delegate_to: localhost
   become: false
   register: openbao_bootstrap_cert_stat
-  when: openbao_tls_mode in ['listener_acme', 'bootstrap_only']
+  when: openbao_tls_mode in ['agent_pki', 'listener_acme', 'bootstrap_only']
 
 - name: Check bootstrap private key on controller
   ansible.builtin.stat:
@@ -99,7 +126,7 @@
   delegate_to: localhost
   become: false
   register: openbao_bootstrap_key_stat
-  when: openbao_tls_mode in ['listener_acme', 'bootstrap_only']
+  when: openbao_tls_mode in ['agent_pki', 'listener_acme', 'bootstrap_only']
 
 - name: Assert bootstrap TLS files exist
   ansible.builtin.assert:
@@ -109,7 +136,7 @@
     fail_msg: >-
       Missing bootstrap TLS files for {{ inventory_hostname }}. Expected
       {{ openbao_tls_bootstrap_cert_src }} and {{ openbao_tls_bootstrap_key_src }}.
-  when: openbao_tls_mode in ['listener_acme', 'bootstrap_only']
+  when: openbao_tls_mode in ['agent_pki', 'listener_acme', 'bootstrap_only']
 
 - name: Assert static unseal key and root CA variables are present
   ansible.builtin.assert:

@@ -1,0 +1,184 @@
+---
+- name: Check OpenBao agent AppRole artifact on controller
+  ansible.builtin.stat:
+    path: "{{ openbao_agent_approle_artifact }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_agent_approle_artifact_stat
+
+- name: Assert OpenBao agent AppRole artifact exists
+  ansible.builtin.assert:
+    that:
+      - openbao_agent_approle_artifact_stat.stat.exists | default(false)
+    fail_msg: "Missing {{ openbao_agent_approle_artifact }}. Run OpenBao PKI setup before converging agent_pki."
+
+- name: Read OpenBao agent AppRole artifact
+  ansible.builtin.slurp:
+    src: "{{ openbao_agent_approle_artifact }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_agent_approle_artifact_content
+  no_log: true
+
+- name: Set OpenBao agent AppRole artifact facts
+  ansible.builtin.set_fact:
+    openbao_agent_approle_artifact_data: "{{ openbao_agent_approle_artifact_content.content | b64decode | from_json }}"
+    openbao_agent_expected_cert_name_fingerprint: >-
+      {{
+        {
+          'dns_names': openbao_agent_cert_dns_names | unique | list,
+          'ip_sans': openbao_agent_cert_ip_sans | default([]) | unique | list
+        } | to_json | hash('sha256')
+      }}
+  no_log: true
+
+- name: Assert OpenBao agent AppRole artifact matches this host
+  ansible.builtin.assert:
+    that:
+      - (openbao_agent_approle_artifact_data.host | default('')) == inventory_hostname
+      - (openbao_agent_approle_artifact_data.auth_mount | default('')) == openbao_agent_auth_mount
+      - (openbao_agent_approle_artifact_data.role_name | default('')) == openbao_agent_pki_role_name
+      - (openbao_agent_approle_artifact_data.policy_name | default('')) == openbao_agent_policy_name
+      - (openbao_agent_approle_artifact_data.role_id | default('')) | length > 0
+      - (openbao_agent_approle_artifact_data.secret_id | default('')) | length > 0
+      - (openbao_agent_approle_artifact_data.cert_name_fingerprint | default('')) == openbao_agent_expected_cert_name_fingerprint
+    fail_msg: "{{ openbao_agent_approle_artifact }} is stale or does not match {{ inventory_hostname }}."
+
+- name: Ensure OpenBao agent directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ openbao_agent_config_dir }}", mode: "0700" }
+    - { path: "{{ openbao_agent_state_dir }}", mode: "0700" }
+    - { path: "{{ openbao_agent_hook_path | dirname }}", mode: "0755" }
+
+- name: Install OpenBao agent role ID
+  ansible.builtin.copy:
+    content: "{{ openbao_agent_approle_artifact_data.role_id }}\n"
+    dest: "{{ openbao_agent_role_id_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart OpenBao agent
+
+- name: Install OpenBao agent secret ID
+  ansible.builtin.copy:
+    content: "{{ openbao_agent_approle_artifact_data.secret_id }}\n"
+    dest: "{{ openbao_agent_secret_id_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart OpenBao agent
+
+- name: Install OpenBao agent listener certificate template
+  ansible.builtin.template:
+    src: listener-bundle.ctmpl.j2
+    dest: "{{ openbao_agent_bundle_template_path }}"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart OpenBao agent
+
+- name: Install OpenBao agent configuration
+  ansible.builtin.template:
+    src: openbao-agent.hcl.j2
+    dest: "{{ openbao_agent_config_file }}"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart OpenBao agent
+
+- name: Install OpenBao agent listener certificate hook
+  ansible.builtin.template:
+    src: openbao-agent-listener-cert-hook.py.j2
+    dest: "{{ openbao_agent_hook_path }}"
+    owner: root
+    group: root
+    mode: "0750"
+  notify: Restart OpenBao agent
+
+- name: Install OpenBao agent systemd unit
+  ansible.builtin.template:
+    src: openbao-agent.service.j2
+    dest: /etc/systemd/system/openbao-agent.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart OpenBao agent
+
+- name: Flush OpenBao agent handlers before service start
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start OpenBao agent
+  ansible.builtin.service:
+    name: openbao-agent
+    enabled: true
+    state: started
+
+- name: Wait for OpenBao agent listener certificate bundle
+  ansible.builtin.command:
+    argv:
+      - test
+      - -s
+      - "{{ openbao_agent_bundle_path }}"
+  register: openbao_agent_bundle_wait
+  changed_when: false
+  until: openbao_agent_bundle_wait.rc == 0
+  retries: 24
+  delay: 5
+
+- name: Reconcile OpenBao listener certificate from agent bundle
+  ansible.builtin.command:
+    argv:
+      - "{{ openbao_agent_hook_path }}"
+  changed_when: false
+
+- name: Wait for OpenBao listener after agent certificate convergence
+  ansible.builtin.wait_for:
+    host: "{{ openbao_node_fqdn }}"
+    port: "{{ openbao_listener_port }}"
+    timeout: 180
+
+- name: Validate OpenBao agent-managed listener certificate names
+  ansible.builtin.shell: >-
+    timeout 10 openssl s_client
+    -connect {{ (openbao_node_fqdn ~ ':' ~ openbao_listener_port) | quote }}
+    -servername {{ item | quote }}
+    -verify_hostname {{ item | quote }}
+    -CAfile {{ openbao_ca_cert_file | quote }}
+    -verify_return_error
+    -brief
+    < /dev/null
+  loop: "{{ [openbao_public_fqdn, openbao_node_fqdn] | unique }}"
+  register: openbao_agent_cert_check
+  changed_when: false
+  until: openbao_agent_cert_check.rc == 0
+  retries: 12
+  delay: 10
+
+- name: Wait for OpenBao health after agent certificate convergence
+  ansible.builtin.command: bao status -format=json
+  environment:
+    BAO_ADDR: "{{ openbao_cli_addr }}"
+    VAULT_ADDR: "{{ openbao_cli_addr }}"
+    BAO_CACERT: "{{ openbao_ca_cert_file }}"
+    VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+    BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+    VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+  register: openbao_agent_node_status
+  changed_when: false
+  failed_when: false
+  until:
+    - openbao_agent_node_status.rc == 0
+    - (openbao_agent_node_status.stdout | from_json).initialized | default(false) | bool
+    - not ((openbao_agent_node_status.stdout | from_json).sealed | default(true) | bool)
+  retries: 36
+  delay: 5
