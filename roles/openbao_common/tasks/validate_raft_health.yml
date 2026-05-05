@@ -1,0 +1,175 @@
+---
+- name: Set default OpenBao Raft validation host
+  ansible.builtin.set_fact:
+    openbao_raft_validation_host: "{{ groups[openbao_cluster_group][0] }}"
+  run_once: true
+
+- name: Prefer bootstrap host for OpenBao Raft validation
+  ansible.builtin.set_fact:
+    openbao_raft_validation_host: "{{ openbao_bootstrap_host }}"
+  when: openbao_bootstrap_host is defined
+  run_once: true
+
+- name: Prefer active OpenBao host for Raft validation
+  ansible.builtin.set_fact:
+    openbao_raft_validation_host: "{{ (groups.openbao_upgrade_active | default([]))[0] }}"
+  when: (groups.openbao_upgrade_active | default([])) | length == 1
+  run_once: true
+
+- name: Use explicit OpenBao Raft validation host
+  ansible.builtin.set_fact:
+    openbao_raft_validation_host: "{{ openbao_raft_validation_delegate }}"
+  when:
+    - openbao_raft_validation_delegate is defined
+    - openbao_raft_validation_delegate | length > 0
+  run_once: true
+
+- name: Set expected OpenBao Raft server IDs
+  ansible.builtin.set_fact:
+    openbao_raft_expected_server_ids: "{{ groups[openbao_cluster_group] | sort }}"
+    openbao_raft_expected_server_addresses: []
+  run_once: true
+
+- name: Set expected OpenBao Raft server addresses
+  ansible.builtin.set_fact:
+    openbao_raft_expected_server_addresses: >-
+      {{
+        openbao_raft_expected_server_addresses
+        + [
+          hostvars[item].openbao_node_fqdn ~ ':'
+          ~ (hostvars[item].openbao_cluster_port | string)
+        ]
+      }}
+  loop: "{{ openbao_raft_expected_server_ids }}"
+  loop_control:
+    label: "{{ item }}"
+  run_once: true
+
+- name: Check init artifact exists when no operator token was supplied
+  ansible.builtin.stat:
+    path: "{{ openbao_init_artifact }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_raft_init_artifact_stat
+  run_once: true
+  when: (openbao_operator_token | default('') | length) == 0
+
+- name: Assert an operator token source is available for Raft validation
+  ansible.builtin.assert:
+    that:
+      - >-
+        (openbao_operator_token | default('') | length) > 0
+        or openbao_raft_init_artifact_stat.stat.exists | default(false)
+    fail_msg: >-
+      Set openbao_operator_token or keep {{ openbao_init_artifact }} for
+      authenticated OpenBao Raft validation.
+  run_once: true
+
+- name: Load init artifact for Raft validation token
+  ansible.builtin.slurp:
+    src: "{{ openbao_init_artifact }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_raft_init_artifact_content
+  no_log: true
+  run_once: true
+  when: (openbao_operator_token | default('') | length) == 0
+
+- name: Set OpenBao Raft validation token
+  ansible.builtin.set_fact:
+    openbao_raft_validation_token: >-
+      {{
+        openbao_operator_token
+        if (openbao_operator_token | default('') | length) > 0
+        else ((openbao_raft_init_artifact_content.content | b64decode | from_json).root_token)
+      }}
+  no_log: true
+  run_once: true
+
+- name: Read OpenBao Raft peers
+  ansible.builtin.command: bao operator raft list-peers -format=json
+  environment:
+    BAO_ADDR: "{{ hostvars[openbao_raft_validation_host].openbao_cli_addr }}"
+    VAULT_ADDR: "{{ hostvars[openbao_raft_validation_host].openbao_cli_addr }}"
+    BAO_CACERT: "{{ hostvars[openbao_raft_validation_host].openbao_ca_cert_file }}"
+    VAULT_CACERT: "{{ hostvars[openbao_raft_validation_host].openbao_ca_cert_file }}"
+    BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+    VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+    BAO_TOKEN: "{{ openbao_raft_validation_token }}"
+    VAULT_TOKEN: "{{ openbao_raft_validation_token }}"
+  delegate_to: "{{ openbao_raft_validation_host }}"
+  register: openbao_raft_health_peers
+  changed_when: false
+  failed_when: false
+  no_log: true
+  run_once: true
+  until:
+    - openbao_raft_health_peers.rc == 0
+    - >-
+      not (openbao_raft_health_wait_for_convergence | default(false) | bool)
+      or (
+        (openbao_raft_health_peers.stdout | default('{}', true) | from_json)
+        .data.config.servers | default([])
+      )
+      | length == openbao_raft_expected_server_ids | length
+    - >-
+      not (openbao_raft_health_wait_for_convergence | default(false) | bool)
+      or (
+        (openbao_raft_health_peers.stdout | default('{}', true) | from_json)
+        .data.config.servers | default([])
+        | selectattr('voter', 'equalto', true)
+        | list
+      )
+      | length == openbao_raft_expected_server_ids | length
+  retries: "{{ openbao_raft_health_retries | default(24) }}"
+  delay: "{{ openbao_raft_health_delay | default(5) }}"
+
+- name: Set observed OpenBao Raft facts
+  ansible.builtin.set_fact:
+    openbao_raft_observed_servers: >-
+      {{
+        (openbao_raft_health_peers.stdout | from_json).data.config.servers
+        | default([])
+      }}
+    openbao_raft_observed_server_ids: >-
+      {{
+        (openbao_raft_health_peers.stdout | from_json).data.config.servers
+        | default([])
+        | map(attribute='node_id')
+        | list
+        | sort
+      }}
+    openbao_raft_observed_voter_ids: >-
+      {{
+        (openbao_raft_health_peers.stdout | from_json).data.config.servers
+        | default([])
+        | selectattr('voter', 'equalto', true)
+        | map(attribute='node_id')
+        | list
+        | sort
+      }}
+    openbao_raft_observed_server_addresses: >-
+      {{
+        (openbao_raft_health_peers.stdout | from_json).data.config.servers
+        | default([])
+        | map(attribute='address')
+        | list
+        | sort
+      }}
+  run_once: true
+
+- name: Assert OpenBao Raft membership matches inventory
+  ansible.builtin.assert:
+    that:
+      - openbao_raft_health_peers.rc == 0
+      - openbao_raft_observed_server_ids == openbao_raft_expected_server_ids
+      - openbao_raft_observed_voter_ids == openbao_raft_expected_server_ids
+      - openbao_raft_observed_server_addresses == openbao_raft_expected_server_addresses | sort
+    fail_msg: >-
+      Refusing to continue because OpenBao Raft membership does not match
+      inventory. Expected voting peers {{
+        openbao_raft_expected_server_ids | join(', ')
+      }} with addresses {{
+        (openbao_raft_expected_server_addresses | sort) | join(', ')
+      }}. Repair Raft membership before rerunning.
+  run_once: true

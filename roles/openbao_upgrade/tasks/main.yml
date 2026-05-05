@@ -68,14 +68,7 @@
 
 - name: Set OpenBao restart requirement after package changes
   ansible.builtin.set_fact:
-    openbao_upgrade_restart_required: >-
-      {{
-        openbao_package_upgrade_required | bool
-        and (
-          (openbao_legacy_package_removal is defined and openbao_legacy_package_removal is changed)
-          or (openbao_package_install is defined and openbao_package_install is changed)
-        )
-      }}
+    openbao_upgrade_restart_required: "{{ openbao_package_upgrade_required | bool }}"
 
 - name: Restart OpenBao after package upgrade
   ansible.builtin.service:

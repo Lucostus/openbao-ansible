@@ -127,6 +127,9 @@
         fail_msg: "Could not classify all OpenBao nodes before rolling upgrade."
       run_once: true
 
+    - name: Validate OpenBao Raft health before snapshot and package work
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/validate_raft_health.yml
+
     - name: Create controller artifact directory
       ansible.builtin.file:
         path: "{{ openbao_secure_artifacts_dir }}"
@@ -235,6 +238,20 @@
             | join(', ')
           }}.
 
+- name: Validate Raft after standby upgrades
+  hosts: rhel10
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    openbao_validate_bootstrap_inputs: false
+  pre_tasks:
+    - name: Load OpenBao secret variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
+  tasks:
+    - name: Validate OpenBao Raft health after standby upgrades
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/validate_raft_health.yml
+
 - name: Upgrade active node needing version change last
   hosts: rhel10
   become: true
@@ -249,6 +266,20 @@
   roles:
     - role: openbao_upgrade
       when: inventory_hostname in (groups.openbao_upgrade_active_needing_change | default([]))
+
+- name: Validate Raft after active upgrade
+  hosts: rhel10
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    openbao_validate_bootstrap_inputs: false
+  pre_tasks:
+    - name: Load OpenBao secret variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
+  tasks:
+    - name: Validate OpenBao Raft health after active upgrade
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/validate_raft_health.yml
 
 - name: Confirm every required upgrade completed
   hosts: localhost
