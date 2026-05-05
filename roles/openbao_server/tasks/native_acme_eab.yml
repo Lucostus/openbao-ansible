@@ -1,0 +1,74 @@
+---
+- name: Check native ACME EAB artifact on controller
+  ansible.builtin.stat:
+    path: "{{ openbao_secure_artifacts_dir }}/{{ inventory_hostname }}-eab.json"
+  delegate_to: localhost
+  become: false
+  register: openbao_server_eab_artifact
+  when: openbao_certificate_mode == 'native_acme'
+
+- name: Read native ACME EAB artifact
+  ansible.builtin.slurp:
+    src: "{{ openbao_secure_artifacts_dir }}/{{ inventory_hostname }}-eab.json"
+  delegate_to: localhost
+  become: false
+  register: openbao_server_eab_artifact_content
+  no_log: true
+  when:
+    - openbao_certificate_mode == 'native_acme'
+    - openbao_server_eab_artifact.stat.exists | default(false)
+
+- name: Default native ACME EAB artifact currency
+  ansible.builtin.set_fact:
+    openbao_server_eab_artifact_current: false
+  when: openbao_certificate_mode == 'native_acme'
+
+- name: Check native ACME EAB artifact matches this host and directory
+  ansible.builtin.set_fact:
+    openbao_server_eab_artifact_current: >-
+      {{
+        ((openbao_server_eab_artifact_content.content | b64decode | from_json).host | default('')) == inventory_hostname
+        and ((openbao_server_eab_artifact_content.content | b64decode | from_json).directory | default('')) == openbao_native_acme_directory
+      }}
+  no_log: true
+  when:
+    - openbao_certificate_mode == 'native_acme'
+    - openbao_server_eab_artifact.stat.exists | default(false)
+
+- name: Select effective OpenBao listener TLS mode
+  ansible.builtin.set_fact:
+    openbao_effective_tls_mode: >-
+      {{
+        'native_acme'
+        if (
+          openbao_certificate_mode == 'native_acme'
+          and openbao_server_eab_artifact_current | default(false)
+        )
+        else 'bootstrap'
+        if openbao_certificate_mode == 'native_acme'
+        else openbao_certificate_mode
+      }}
+
+- name: Set native ACME EAB configuration facts
+  ansible.builtin.set_fact:
+    openbao_native_acme_effective_eab_key_id: >-
+      {{
+        (openbao_server_eab_artifact_content.content | b64decode | from_json).key_id
+        | default(openbao_native_acme_eab_key_id)
+      }}
+    openbao_native_acme_effective_eab_mac_key: >-
+      {{
+        (openbao_server_eab_artifact_content.content | b64decode | from_json).hmac_key
+        | default(openbao_native_acme_eab_mac_key)
+      }}
+  no_log: true
+  when: openbao_effective_tls_mode == 'native_acme'
+
+- name: Assert native ACME credentials are ready when required
+  ansible.builtin.assert:
+    that:
+      - openbao_effective_tls_mode == 'native_acme'
+      - openbao_native_acme_effective_eab_key_id | length > 0
+      - openbao_native_acme_effective_eab_mac_key | length > 0
+    fail_msg: "Native ACME convergence requires a current EAB artifact for {{ inventory_hostname }}."
+  when: openbao_require_native_acme | default(false) | bool

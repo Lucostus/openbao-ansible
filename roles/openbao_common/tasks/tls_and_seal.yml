@@ -9,22 +9,22 @@
   no_log: true
 
 - name: Resolve bootstrap TLS source inputs
-  ansible.builtin.include_tasks: bootstrap_tls_resolve.yml
+  ansible.builtin.include_tasks: resolve_bootstrap_tls.yml
 
 - name: Install controller bootstrap OpenBao listener certificate
   ansible.builtin.copy:
-    src: "{{ openbao_tls_bootstrap_effective_cert_src }}"
+    src: "{{ openbao_bootstrap_tls_effective_cert }}"
     dest: "{{ openbao_tls_cert_file }}"
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
     mode: "0640"
   when:
     - openbao_bootstrap_tls_install_needed | bool
-    - openbao_tls_bootstrap_effective_source | default('') == 'controller'
+    - openbao_bootstrap_tls_effective_source | default('') == 'controller'
 
 - name: Install controller bootstrap OpenBao listener private key
   ansible.builtin.copy:
-    src: "{{ openbao_tls_bootstrap_effective_key_src }}"
+    src: "{{ openbao_bootstrap_tls_effective_key }}"
     dest: "{{ openbao_tls_key_file }}"
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
@@ -32,37 +32,37 @@
   no_log: true
   when:
     - openbao_bootstrap_tls_install_needed | bool
-    - openbao_tls_bootstrap_effective_source | default('') == 'controller'
+    - openbao_bootstrap_tls_effective_source | default('') == 'controller'
 
-- name: Install remote bootstrap OpenBao listener certificate
+- name: Install node bootstrap OpenBao listener certificate
   ansible.builtin.copy:
     remote_src: true
-    src: "{{ openbao_tls_bootstrap_effective_cert_src }}"
+    src: "{{ openbao_bootstrap_tls_effective_cert }}"
     dest: "{{ openbao_tls_cert_file }}"
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
     mode: "0640"
   when:
     - openbao_bootstrap_tls_install_needed | bool
-    - openbao_tls_bootstrap_effective_source | default('') == 'remote'
-    - openbao_tls_bootstrap_chain_src | length == 0
+    - openbao_bootstrap_tls_effective_source | default('') == 'node'
+    - openbao_node_bootstrap_tls_chain | length == 0
 
-- name: Read remote bootstrap OpenBao listener certificate
+- name: Read node bootstrap OpenBao listener certificate
   ansible.builtin.slurp:
-    src: "{{ openbao_tls_bootstrap_effective_cert_src }}"
+    src: "{{ openbao_bootstrap_tls_effective_cert }}"
   register: openbao_remote_bootstrap_cert_content
   when:
     - openbao_bootstrap_tls_install_needed | bool
-    - openbao_tls_bootstrap_effective_source | default('') == 'remote'
-    - openbao_tls_bootstrap_chain_src | length > 0
+    - openbao_bootstrap_tls_effective_source | default('') == 'node'
+    - openbao_node_bootstrap_tls_chain | length > 0
 
-- name: Install remote bootstrap OpenBao listener certificate with controller-side chain
+- name: Install node bootstrap OpenBao listener certificate with controller-side chain
   ansible.builtin.copy:
     content: >-
       {{
         (openbao_remote_bootstrap_cert_content.content | b64decode | trim)
         ~ '\n'
-        ~ (lookup('ansible.builtin.file', openbao_tls_bootstrap_chain_src) | trim)
+        ~ (lookup('ansible.builtin.file', openbao_node_bootstrap_tls_chain) | trim)
         ~ '\n'
       }}
     dest: "{{ openbao_tls_cert_file }}"
@@ -71,13 +71,13 @@
     mode: "0640"
   when:
     - openbao_bootstrap_tls_install_needed | bool
-    - openbao_tls_bootstrap_effective_source | default('') == 'remote'
-    - openbao_tls_bootstrap_chain_src | length > 0
+    - openbao_bootstrap_tls_effective_source | default('') == 'node'
+    - openbao_node_bootstrap_tls_chain | length > 0
 
-- name: Install remote bootstrap OpenBao listener private key
+- name: Install node bootstrap OpenBao listener private key
   ansible.builtin.copy:
     remote_src: true
-    src: "{{ openbao_tls_bootstrap_effective_key_src }}"
+    src: "{{ openbao_bootstrap_tls_effective_key }}"
     dest: "{{ openbao_tls_key_file }}"
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
@@ -85,7 +85,7 @@
   no_log: true
   when:
     - openbao_bootstrap_tls_install_needed | bool
-    - openbao_tls_bootstrap_effective_source | default('') == 'remote'
+    - openbao_bootstrap_tls_effective_source | default('') == 'node'
 
 - name: Validate bootstrap listener certificate parses
   ansible.builtin.command:

@@ -1,4 +1,6 @@
 ---
+name: openbao-ansible
+
 services:
   rhel10-ansible-1:
     build:
@@ -21,7 +23,7 @@ services:
       - "bao.lab.local:10.89.10.10"
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ./secure-artifacts/lab/ssh/id_ed25519.pub:/etc/ssh/authorized_keys/ansible:ro
+      - ../secure-artifacts/lab/ssh/id_ed25519.pub:/etc/ssh/authorized_keys/ansible:ro
       - rhel10-ansible-1-data:/var/lib/openbao
       - openbao-acme-cache:/var/lib/openbao/certmagic
     networks:
@@ -49,7 +51,7 @@ services:
       - "bao.lab.local:10.89.10.10"
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ./secure-artifacts/lab/ssh/id_ed25519.pub:/etc/ssh/authorized_keys/ansible:ro
+      - ../secure-artifacts/lab/ssh/id_ed25519.pub:/etc/ssh/authorized_keys/ansible:ro
       - rhel10-ansible-2-data:/var/lib/openbao
       - openbao-acme-cache:/var/lib/openbao/certmagic
     networks:
@@ -79,7 +81,7 @@ services:
       - "bao.lab.local:10.89.10.10"
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ./secure-artifacts/lab/ssh/id_ed25519.pub:/etc/ssh/authorized_keys/ansible:ro
+      - ../secure-artifacts/lab/ssh/id_ed25519.pub:/etc/ssh/authorized_keys/ansible:ro
       - rhel10-ansible-3-data:/var/lib/openbao
       - openbao-acme-cache:/var/lib/openbao/certmagic
     networks:

@@ -1,0 +1,240 @@
+---
+- name: Assert bootstrap TLS source is supported
+  ansible.builtin.assert:
+    that:
+      - openbao_bootstrap_tls_source in ['controller', 'node']
+    fail_msg: "openbao_bootstrap_tls_source must be either controller or node."
+
+- name: Check current OpenBao listener certificate for Agent certificate renewal
+  ansible.builtin.stat:
+    path: "{{ openbao_tls_cert_file }}"
+  register: openbao_agent_current_listener_cert
+  when: openbao_certificate_mode == 'agent'
+
+- name: Check current OpenBao listener private key for Agent certificate renewal
+  ansible.builtin.stat:
+    path: "{{ openbao_tls_key_file }}"
+  register: openbao_agent_current_listener_key
+  no_log: true
+  when: openbao_certificate_mode == 'agent'
+
+- name: Assert Agent certificate renewal listener TLS files are either both present or both absent
+  ansible.builtin.assert:
+    that:
+      - (openbao_agent_current_listener_cert.stat.exists | default(false)) == (openbao_agent_current_listener_key.stat.exists | default(false))
+    fail_msg: >-
+      openbao_certificate_mode=agent found only one of {{ openbao_tls_cert_file }}
+      and {{ openbao_tls_key_file }}. Remove the partial file or restore a
+      matching certificate/key pair before rerunning.
+  when: openbao_certificate_mode == 'agent'
+
+- name: Set bootstrap TLS install requirement
+  ansible.builtin.set_fact:
+    openbao_bootstrap_tls_install_needed: >-
+      {{
+        openbao_certificate_mode in ['native_acme', 'bootstrap']
+        or (
+          openbao_certificate_mode == 'agent'
+          and not (openbao_agent_current_listener_cert.stat.exists | default(false))
+        )
+      }}
+
+- name: Assert node bootstrap TLS is only used for Agent certificate renewal
+  ansible.builtin.assert:
+    that:
+      - openbao_certificate_mode == 'agent'
+    fail_msg: "openbao_bootstrap_tls_source=node is supported only with openbao_certificate_mode=agent."
+  when: openbao_bootstrap_tls_source == 'node'
+
+- name: Assert bootstrap chain append is only used with node bootstrap TLS
+  ansible.builtin.assert:
+    that:
+      - openbao_bootstrap_tls_source == 'node'
+    fail_msg: "openbao_node_bootstrap_tls_chain is supported only with openbao_bootstrap_tls_source=node."
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_node_bootstrap_tls_chain | length > 0
+
+- name: Set controller bootstrap TLS source facts
+  ansible.builtin.set_fact:
+    openbao_bootstrap_tls_effective_source: controller
+    openbao_bootstrap_tls_effective_cert: "{{ openbao_controller_bootstrap_tls_cert }}"
+    openbao_bootstrap_tls_effective_key: "{{ openbao_controller_bootstrap_tls_key }}"
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'controller'
+
+- name: Check bootstrap certificate on controller
+  ansible.builtin.stat:
+    path: "{{ openbao_bootstrap_tls_effective_cert }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_bootstrap_cert_stat
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'controller'
+
+- name: Check bootstrap private key on controller
+  ansible.builtin.stat:
+    path: "{{ openbao_bootstrap_tls_effective_key }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_bootstrap_key_stat
+  no_log: true
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'controller'
+
+- name: Assert controller bootstrap TLS files exist
+  ansible.builtin.assert:
+    that:
+      - openbao_bootstrap_cert_stat.stat.exists | default(false)
+      - openbao_bootstrap_key_stat.stat.exists | default(false)
+    fail_msg: >-
+      Missing bootstrap TLS files for {{ inventory_hostname }}. Expected
+      {{ openbao_bootstrap_tls_effective_cert }} and
+      {{ openbao_bootstrap_tls_effective_key }} on the Ansible controller.
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'controller'
+
+- name: Assert node bootstrap TLS explicit paths are paired
+  ansible.builtin.assert:
+    that:
+      - (openbao_node_bootstrap_tls_cert | length > 0) == (openbao_node_bootstrap_tls_key | length > 0)
+    fail_msg: >-
+      Set both openbao_node_bootstrap_tls_cert and
+      openbao_node_bootstrap_tls_key, or leave both empty to use
+      candidate auto-detection.
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'node'
+
+- name: Check explicit node bootstrap certificate
+  ansible.builtin.stat:
+    path: "{{ openbao_node_bootstrap_tls_cert }}"
+  register: openbao_remote_bootstrap_cert_explicit_stat
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'node'
+    - openbao_node_bootstrap_tls_cert | length > 0
+
+- name: Check explicit node bootstrap private key
+  ansible.builtin.stat:
+    path: "{{ openbao_node_bootstrap_tls_key }}"
+  register: openbao_remote_bootstrap_key_explicit_stat
+  no_log: true
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'node'
+    - openbao_node_bootstrap_tls_key | length > 0
+
+- name: Assert explicit node bootstrap TLS files exist
+  ansible.builtin.assert:
+    that:
+      - openbao_remote_bootstrap_cert_explicit_stat.stat.exists | default(false)
+      - openbao_remote_bootstrap_key_explicit_stat.stat.exists | default(false)
+    fail_msg: >-
+      Missing node bootstrap TLS files for {{ inventory_hostname }}. Expected
+      {{ openbao_node_bootstrap_tls_cert }} and
+      {{ openbao_node_bootstrap_tls_key }} on the managed node.
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'node'
+    - openbao_node_bootstrap_tls_cert | length > 0
+
+- name: Set explicit node bootstrap TLS source facts
+  ansible.builtin.set_fact:
+    openbao_bootstrap_tls_effective_source: node
+    openbao_bootstrap_tls_effective_cert: "{{ openbao_node_bootstrap_tls_cert }}"
+    openbao_bootstrap_tls_effective_key: "{{ openbao_node_bootstrap_tls_key }}"
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'node'
+    - openbao_node_bootstrap_tls_cert | length > 0
+
+- name: Check candidate node bootstrap certificates
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ openbao_node_bootstrap_tls_cert_candidates }}"
+  register: openbao_remote_bootstrap_cert_candidate_stats
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'node'
+    - openbao_node_bootstrap_tls_cert | length == 0
+
+- name: Check candidate node bootstrap private keys
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ openbao_node_bootstrap_tls_key_candidates }}"
+  register: openbao_remote_bootstrap_key_candidate_stats
+  no_log: true
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'node'
+    - openbao_node_bootstrap_tls_key | length == 0
+
+- name: Set auto-detected node bootstrap TLS source facts
+  ansible.builtin.set_fact:
+    openbao_bootstrap_tls_effective_source: node
+    openbao_bootstrap_tls_effective_cert: >-
+      {{
+        openbao_remote_bootstrap_cert_candidate_stats.results
+        | default([])
+        | selectattr('stat.exists', 'equalto', true)
+        | map(attribute='item')
+        | list
+        | first
+        | default('')
+      }}
+    openbao_bootstrap_tls_effective_key: >-
+      {{
+        openbao_remote_bootstrap_key_candidate_stats.results
+        | default([])
+        | selectattr('stat.exists', 'equalto', true)
+        | map(attribute='item')
+        | list
+        | first
+        | default('')
+      }}
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'node'
+    - openbao_node_bootstrap_tls_cert | length == 0
+
+- name: Assert auto-detected node bootstrap TLS files exist
+  ansible.builtin.assert:
+    that:
+      - openbao_bootstrap_tls_effective_cert | length > 0
+      - openbao_bootstrap_tls_effective_key | length > 0
+    fail_msg: >-
+      Could not auto-detect node bootstrap TLS files for {{ inventory_hostname }}.
+      Certificate candidates: {{ openbao_node_bootstrap_tls_cert_candidates | join(', ') }}.
+      Private key candidates: {{ openbao_node_bootstrap_tls_key_candidates | join(', ') }}.
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'node'
+    - openbao_node_bootstrap_tls_cert | length == 0
+
+- name: Check bootstrap certificate chain on controller
+  ansible.builtin.stat:
+    path: "{{ openbao_node_bootstrap_tls_chain }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_bootstrap_chain_stat
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'node'
+    - openbao_node_bootstrap_tls_chain | length > 0
+
+- name: Assert bootstrap certificate chain exists on controller
+  ansible.builtin.assert:
+    that:
+      - openbao_bootstrap_chain_stat.stat.exists | default(false)
+    fail_msg: >-
+      Missing bootstrap certificate chain on the Ansible controller:
+      {{ openbao_node_bootstrap_tls_chain }}.
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'node'
+    - openbao_node_bootstrap_tls_chain | length > 0

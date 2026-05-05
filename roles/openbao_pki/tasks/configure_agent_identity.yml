@@ -1,7 +1,7 @@
 ---
 - name: Set OpenBao agent identity facts for {{ openbao_agent_host }}
   ansible.builtin.set_fact:
-    openbao_agent_identity_role_name: "{{ hostvars[openbao_agent_host].openbao_agent_pki_role_name }}"
+    openbao_agent_identity_role_name: "{{ hostvars[openbao_agent_host].openbao_agent_role_name }}"
     openbao_agent_identity_policy_name: "{{ hostvars[openbao_agent_host].openbao_agent_policy_name }}"
     openbao_agent_identity_artifact: "{{ hostvars[openbao_agent_host].openbao_agent_approle_artifact }}"
     openbao_agent_identity_cert_common_name: "{{ hostvars[openbao_agent_host].openbao_agent_cert_common_name }}"

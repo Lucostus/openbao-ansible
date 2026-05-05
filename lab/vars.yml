@@ -1,0 +1,34 @@
+---
+openbao_cluster_name: openbao-docker-lab
+openbao_release_arch: arm64
+openbao_public_fqdn: bao.lab.local
+openbao_public_api_addr: https://bao.lab.local:8443
+
+openbao_nodes:
+  rhel10-ansible-1:
+    fqdn: bao1.lab.local
+    ip: 10.89.10.11
+  rhel10-ansible-2:
+    fqdn: bao2.lab.local
+    ip: 10.89.10.12
+  rhel10-ansible-3:
+    fqdn: bao3.lab.local
+    ip: 10.89.10.13
+
+openbao_certificate_mode: agent
+openbao_bootstrap_tls_source: controller
+openbao_pki_cluster_path: "https://{{ openbao_public_fqdn }}:8300/v1/{{ openbao_pki_mount }}"
+openbao_pki_cluster_aia_path: "{{ openbao_public_api_addr }}/v1/{{ openbao_pki_mount }}"
+openbao_native_acme_directory: "{{ openbao_pki_cluster_path }}/roles/{{ openbao_native_acme_role_name }}/acme/directory"
+openbao_secure_artifacts_dir: "{{ playbook_dir }}/../secure-artifacts/lab/openbao"
+
+# These values are only used when the lab is explicitly overridden to
+# openbao_certificate_mode=native_acme.
+openbao_native_acme_cache_mode: pre_mounted
+openbao_native_acme_cache_nfs_enabled: false
+openbao_native_acme_bootstrap_api_enabled: true
+openbao_native_acme_tls_alpn_routed: true
+
+openbao_manage_firewalld: false
+openbao_manage_selinux: false
+openbao_systemd_hardening_enabled: false

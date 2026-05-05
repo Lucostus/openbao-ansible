@@ -1,20 +1,20 @@
 ---
-- name: Deploy OpenBao HA cluster
+- name: Prepare OpenBao servers and configure PKI
   hosts: rhel10
   become: true
   gather_facts: true
   vars:
     openbao_validate_bootstrap_inputs: true
   pre_tasks:
-    - name: Load OpenBao variable files
-      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+    - name: Load OpenBao secret variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
   roles:
     - openbao_common
     - openbao_server
     - openbao_bootstrap
     - openbao_pki
 
-- name: Converge OpenBao listeners to agent-managed PKI certificates
+- name: Converge OpenBao Agent listener certificates
   hosts: rhel10
   become: true
   gather_facts: false
@@ -22,39 +22,39 @@
   vars:
     openbao_validate_bootstrap_inputs: false
   pre_tasks:
-    - name: Load OpenBao variable files
-      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+    - name: Load OpenBao secret variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
   roles:
     - role: openbao_agent
       when: openbao_agent_enabled | bool
 
-- name: Converge OpenBao listeners to native ACME
+- name: Converge native listener ACME
   hosts: rhel10
   become: true
   gather_facts: false
   serial: 1
   vars:
     openbao_validate_bootstrap_inputs: false
-    openbao_require_listener_acme: true
-    openbao_validate_listener_acme_certificate: false
+    openbao_require_native_acme: true
+    openbao_validate_native_acme_certificate: false
   pre_tasks:
-    - name: Load OpenBao variable files
-      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+    - name: Load OpenBao secret variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
   roles:
     - role: openbao_server
-      when: openbao_tls_mode == 'listener_acme'
+      when: openbao_certificate_mode == 'native_acme'
 
-- name: Validate OpenBao native listener ACME
+- name: Validate native listener ACME
   hosts: rhel10
   become: true
   gather_facts: false
   vars:
     openbao_validate_bootstrap_inputs: false
   pre_tasks:
-    - name: Load OpenBao variable files
-      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+    - name: Load OpenBao secret variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
   tasks:
-    - name: Validate listener ACME certificate for public OpenBao name
+    - name: Validate native ACME certificate for public OpenBao name
       ansible.builtin.shell: >-
         timeout 10 openssl s_client
         -connect {{ (openbao_node_fqdn ~ ':' ~ openbao_listener_port) | quote }}
@@ -64,9 +64,9 @@
         -verify_return_error
         -brief
         < /dev/null
-      register: openbao_listener_acme_cert_check
+      register: openbao_native_acme_cert_check
       changed_when: false
-      until: openbao_listener_acme_cert_check.rc == 0
+      until: openbao_native_acme_cert_check.rc == 0
       retries: 12
       delay: 10
-      when: openbao_tls_mode == 'listener_acme'
+      when: openbao_certificate_mode == 'native_acme'

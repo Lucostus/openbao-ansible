@@ -3,8 +3,8 @@ Description=OpenBao server
 Documentation=https://openbao.org/docs/
 After=network-online.target remote-fs.target
 Wants=network-online.target remote-fs.target
-{% if openbao_tls_mode == 'listener_acme' %}
-RequiresMountsFor={{ openbao_listener_acme_cache_path }}
+{% if openbao_certificate_mode == 'native_acme' %}
+RequiresMountsFor={{ openbao_native_acme_cache_path }}
 {% endif %}
 
 [Service]

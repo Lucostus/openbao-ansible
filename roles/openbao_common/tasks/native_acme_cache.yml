@@ -1,0 +1,77 @@
+---
+- name: Install NFS utilities when native ACME cache uses NFS
+  ansible.builtin.dnf:
+    name: nfs-utils
+    state: present
+  when:
+    - openbao_certificate_mode == 'native_acme'
+    - openbao_native_acme_cache_mode == 'nfs'
+
+- name: Create native ACME cache directory
+  ansible.builtin.file:
+    path: "{{ openbao_native_acme_cache_path }}"
+    state: directory
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0750"
+  when: openbao_certificate_mode == 'native_acme'
+
+- name: Mount shared native ACME cache
+  ansible.posix.mount:
+    path: "{{ openbao_native_acme_cache_path }}"
+    src: "{{ openbao_native_acme_cache_nfs_src }}"
+    fstype: "{{ openbao_native_acme_cache_nfs_fstype }}"
+    opts: "{{ openbao_native_acme_cache_nfs_opts }}"
+    state: mounted
+  when:
+    - openbao_certificate_mode == 'native_acme'
+    - openbao_native_acme_cache_mode == 'nfs'
+
+- name: Remove managed native ACME cache mount when inactive
+  ansible.posix.mount:
+    path: "{{ openbao_native_acme_cache_path }}"
+    state: absent
+  when:
+    - openbao_certificate_mode != 'native_acme'
+    - openbao_native_acme_cache_mode == 'nfs'
+
+- name: Set shared native ACME cache permissions
+  ansible.builtin.file:
+    path: "{{ openbao_native_acme_cache_path }}"
+    state: directory
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0750"
+  when: openbao_certificate_mode == 'native_acme'
+
+- name: Confirm shared native ACME cache is mounted
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - --mountpoint
+      - "{{ openbao_native_acme_cache_path }}"
+  changed_when: false
+  when:
+    - openbao_certificate_mode == 'native_acme'
+    - openbao_native_acme_cache_mode in ['nfs', 'pre_mounted']
+
+- name: Validate OpenBao can write to shared native ACME cache
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - "{{ openbao_service_user }}"
+      - --
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - |
+        import os, pathlib, tempfile
+        cache = pathlib.Path(os.environ["OPENBAO_ACME_CACHE_PATH"])
+        with tempfile.NamedTemporaryFile(dir=cache, prefix=".ansible-openbao-write-", delete=False) as handle:
+            path = pathlib.Path(handle.name)
+            handle.write(b"ok")
+        path.unlink()
+  environment:
+    OPENBAO_ACME_CACHE_PATH: "{{ openbao_native_acme_cache_path }}"
+  changed_when: false
+  when: openbao_certificate_mode == 'native_acme'

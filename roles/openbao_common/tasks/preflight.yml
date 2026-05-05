@@ -9,17 +9,17 @@
 - name: Assert supported OpenBao deployment options
   ansible.builtin.assert:
     that:
-      - openbao_tls_mode in ['agent_pki', 'listener_acme', 'bootstrap_only']
-      - openbao_tls_bootstrap_source in ['controller', 'remote']
-      - openbao_tls_bootstrap_source != 'remote' or openbao_tls_mode == 'agent_pki'
-      - openbao_acme_challenge in ['http-01', 'tls-alpn-01']
-      - openbao_listener_acme_cache_mode in ['nfs', 'pre_mounted']
-      - openbao_tls_mode != 'listener_acme' or openbao_acme_enabled | bool
+      - openbao_certificate_mode in ['agent', 'native_acme', 'bootstrap']
+      - openbao_bootstrap_tls_source in ['controller', 'node']
+      - openbao_bootstrap_tls_source != 'node' or openbao_certificate_mode == 'agent'
+      - openbao_native_acme_challenge in ['http-01', 'tls-alpn-01']
+      - openbao_native_acme_cache_mode in ['nfs', 'pre_mounted']
+      - openbao_certificate_mode != 'native_acme' or openbao_native_acme_enabled | bool
       - openbao_lb_mode in ['tcp_passthrough', 'tls_termination', 'none']
       - openbao_public_fqdn | length > 0
       - openbao_node_fqdn | length > 0
-      - not (openbao_listener_acme_bootstrap_api_enabled | bool) or openbao_listener_acme_bootstrap_api_port | int != openbao_listener_port | int
-      - not (openbao_listener_acme_bootstrap_api_enabled | bool) or openbao_listener_acme_bootstrap_api_port | int != openbao_cluster_port | int
+      - not (openbao_native_acme_bootstrap_api_enabled | bool) or openbao_native_acme_bootstrap_api_port | int != openbao_listener_port | int
+      - not (openbao_native_acme_bootstrap_api_enabled | bool) or openbao_native_acme_bootstrap_api_port | int != openbao_cluster_port | int
     fail_msg: "OpenBao TLS/LB/ACME variables are invalid; check group_vars/rhel10/main.yml."
 
 - name: Assert advertised OpenBao addresses match the TLS listener
@@ -30,36 +30,36 @@
       - openbao_cli_addr is match('^https://')
     fail_msg: "This role configures a TLS listener; OpenBao advertised API, cluster, and CLI addresses must use https://."
 
-- name: Assert listener ACME is only used with OpenBao versions that support it
+- name: Assert native ACME is only used with OpenBao versions that support it
   ansible.builtin.assert:
     that:
       - openbao_version is version('2.2.0', '>=')
-    fail_msg: "openbao_tls_mode=listener_acme requires OpenBao 2.2.0 or newer."
-  when: openbao_tls_mode == 'listener_acme'
+    fail_msg: "openbao_certificate_mode=native_acme requires OpenBao 2.2.0 or newer."
+  when: openbao_certificate_mode == 'native_acme'
 
-- name: Assert listener ACME NFS cache source is configured
+- name: Assert native ACME NFS cache source is configured
   ansible.builtin.assert:
     that:
-      - openbao_listener_acme_cache_nfs_src | length > 0
-      - openbao_listener_acme_cache_path | length > 0
+      - openbao_native_acme_cache_nfs_src | length > 0
+      - openbao_native_acme_cache_path | length > 0
     fail_msg: >-
-      openbao_tls_mode=listener_acme requires a shared NFS cache. Set
-      openbao_listener_acme_cache_nfs_src to the NFS export that all OpenBao
-      nodes will mount at {{ openbao_listener_acme_cache_path }}.
+      openbao_certificate_mode=native_acme requires a shared NFS cache. Set
+      openbao_native_acme_cache_nfs_src to the NFS export that all OpenBao
+      nodes will mount at {{ openbao_native_acme_cache_path }}.
   when:
-    - openbao_tls_mode == 'listener_acme'
-    - openbao_listener_acme_cache_mode == 'nfs'
+    - openbao_certificate_mode == 'native_acme'
+    - openbao_native_acme_cache_mode == 'nfs'
 
-- name: Assert listener ACME pre-mounted cache path is configured
+- name: Assert native ACME pre-mounted cache path is configured
   ansible.builtin.assert:
     that:
-      - openbao_listener_acme_cache_path | length > 0
-    fail_msg: "openbao_listener_acme_cache_mode=pre_mounted requires openbao_listener_acme_cache_path."
+      - openbao_native_acme_cache_path | length > 0
+    fail_msg: "openbao_native_acme_cache_mode=pre_mounted requires openbao_native_acme_cache_path."
   when:
-    - openbao_tls_mode == 'listener_acme'
-    - openbao_listener_acme_cache_mode == 'pre_mounted'
+    - openbao_certificate_mode == 'native_acme'
+    - openbao_native_acme_cache_mode == 'pre_mounted'
 
-- name: Assert OpenBao agent PKI settings are valid
+- name: Assert OpenBao Agent certificate renewal settings are valid
   ansible.builtin.assert:
     that:
       - openbao_agent_enabled | bool
@@ -73,7 +73,7 @@
       - openbao_agent_secret_id_path is match('^/')
       - openbao_agent_auth_mount | length > 0
       - "'/' not in openbao_agent_auth_mount"
-      - openbao_agent_pki_role_name | length > 0
+      - openbao_agent_role_name | length > 0
       - openbao_agent_policy_name | length > 0
       - openbao_agent_cert_common_name | length > 0
       - openbao_agent_cert_dns_names | unique | length == openbao_agent_cert_dns_names | length
@@ -82,8 +82,8 @@
       - openbao_agent_cert_common_name in openbao_agent_cert_dns_names
       - openbao_agent_cert_ttl | length > 0
       - openbao_agent_restart_jitter_seconds | int >= 0
-    fail_msg: "openbao_tls_mode=agent_pki has invalid OpenBao Agent certificate settings."
-  when: openbao_tls_mode == 'agent_pki'
+    fail_msg: "openbao_certificate_mode=agent has invalid OpenBao Agent certificate settings."
+  when: openbao_certificate_mode == 'agent'
 
 - name: Assert RHEL-like systemd host
   ansible.builtin.assert:
@@ -115,7 +115,7 @@
   when: openbao_manage_hosts_entries | bool
 
 - name: Resolve bootstrap TLS source inputs
-  ansible.builtin.include_tasks: bootstrap_tls_resolve.yml
+  ansible.builtin.include_tasks: resolve_bootstrap_tls.yml
 
 - name: Assert static unseal key and root CA variables are present
   ansible.builtin.assert:
@@ -142,25 +142,25 @@
   changed_when: false
   no_log: true
 
-- name: Assert shared-name listener ACME HTTP challenge routing is confirmed
+- name: Assert shared-name native ACME HTTP challenge routing is confirmed
   ansible.builtin.assert:
     that:
-      - openbao_listener_acme_http_routed | bool
-    fail_msg: "listener_acme with http-01 behind a shared TCP LB needs shared cache and confirmed HTTP challenge routing."
+      - openbao_native_acme_http_routed | bool
+    fail_msg: "native_acme with http-01 behind a shared TCP LB needs shared cache and confirmed HTTP challenge routing."
   when:
-    - openbao_tls_mode == 'listener_acme'
-    - openbao_public_fqdn in openbao_acme_allowed_domains
-    - openbao_acme_challenge == 'http-01'
+    - openbao_certificate_mode == 'native_acme'
+    - openbao_public_fqdn in openbao_native_acme_allowed_domains
+    - openbao_native_acme_challenge == 'http-01'
 
 - name: Assert shared-name TLS-ALPN routing is confirmed
   ansible.builtin.assert:
     that:
-      - openbao_listener_acme_tls_alpn_routed | bool
+      - openbao_native_acme_tls_alpn_routed | bool
     fail_msg: >-
-      listener_acme with tls-alpn-01 requires the L4 load balancer to forward
+      native_acme with tls-alpn-01 requires the L4 load balancer to forward
       {{ openbao_public_fqdn }}:443 to the OpenBao listener while preserving
       TCP/TLS passthrough and ALPN.
   when:
-    - openbao_tls_mode == 'listener_acme'
-    - openbao_public_fqdn in openbao_acme_allowed_domains
-    - openbao_acme_challenge == 'tls-alpn-01'
+    - openbao_certificate_mode == 'native_acme'
+    - openbao_public_fqdn in openbao_native_acme_allowed_domains
+    - openbao_native_acme_challenge == 'tls-alpn-01'

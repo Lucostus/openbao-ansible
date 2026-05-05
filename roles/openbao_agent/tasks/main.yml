@@ -10,7 +10,7 @@
   ansible.builtin.assert:
     that:
       - openbao_agent_approle_artifact_stat.stat.exists | default(false)
-    fail_msg: "Missing {{ openbao_agent_approle_artifact }}. Run OpenBao PKI setup before converging agent_pki."
+    fail_msg: "Missing {{ openbao_agent_approle_artifact }}. Run OpenBao PKI setup before converging agent."
 
 - name: Read OpenBao agent AppRole artifact
   ansible.builtin.slurp:
@@ -37,7 +37,7 @@
     that:
       - (openbao_agent_approle_artifact_data.host | default('')) == inventory_hostname
       - (openbao_agent_approle_artifact_data.auth_mount | default('')) == openbao_agent_auth_mount
-      - (openbao_agent_approle_artifact_data.role_name | default('')) == openbao_agent_pki_role_name
+      - (openbao_agent_approle_artifact_data.role_name | default('')) == openbao_agent_role_name
       - (openbao_agent_approle_artifact_data.policy_name | default('')) == openbao_agent_policy_name
       - (openbao_agent_approle_artifact_data.role_id | default('')) | length > 0
       - (openbao_agent_approle_artifact_data.secret_id | default('')) | length > 0

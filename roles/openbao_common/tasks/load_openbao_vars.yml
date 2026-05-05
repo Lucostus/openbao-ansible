@@ -1,5 +1,9 @@
 ---
-- name: Load OpenBao non-secret variables
+- name: Load OpenBao defaults
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir }}/../group_vars/all/openbao_defaults.yml"
+
+- name: Load OpenBao site variables
   ansible.builtin.include_vars:
     file: "{{ playbook_dir }}/../group_vars/rhel10/main.yml"
 

@@ -12,18 +12,15 @@
 !/playbooks/**
 !/roles/
 !/roles/**
-!/README-openbao-ansible.md
+!/README.md
 !/OPENBAO_ORIGINAL_PLAN.md
 !/AGENTS.md
 !/files/
 !/files/**
-!/compose.openbao-lab.yml
-!/docker/
-!/docker/**
+!/docs/
+!/docs/**
 !/lab/
 !/lab/**
-!/scripts/
-!/scripts/**
 !/inventory/docker-rhel10.ini
 
 /secure-artifacts/

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SSH_DIR="${ROOT_DIR}/secure-artifacts/lab/ssh"
 CA_DIR="${ROOT_DIR}/secure-artifacts/lab/ca"
 OPENBAO_DIR="${ROOT_DIR}/secure-artifacts/lab/openbao"

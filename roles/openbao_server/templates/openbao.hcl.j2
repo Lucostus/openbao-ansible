@@ -27,17 +27,17 @@ listener "tcp" {
   cluster_address = "{{ openbao_cluster_bind_address }}:{{ openbao_cluster_port }}"
   tls_min_version = "{{ openbao_tls_min_version }}"
   tls_disable_client_certs = {{ openbao_tls_disable_client_certs | bool | lower }}
-{% if openbao_effective_tls_mode == 'listener_acme' %}
-  tls_acme_ca_directory = "{{ openbao_listener_acme_ca_directory }}"
-  tls_acme_test_ca_directory = "{{ openbao_listener_acme_test_ca_directory }}"
-  tls_acme_cache_path = "{{ openbao_listener_acme_cache_path }}"
-  tls_acme_ca_root = "{{ openbao_listener_acme_ca_root }}"
-  tls_acme_email = "{{ openbao_listener_acme_email }}"
-  tls_acme_domains = {{ openbao_listener_acme_domains | to_json }}
-  tls_acme_eab_key_id = "{{ openbao_listener_acme_effective_eab_key_id }}"
-  tls_acme_eab_mac_key = "{{ openbao_listener_acme_effective_eab_mac_key }}"
-  tls_acme_disable_http_challenge = {{ (openbao_acme_challenge != 'http-01') | lower }}
-  tls_acme_disable_alpn_challenge = {{ (openbao_acme_challenge != 'tls-alpn-01') | lower }}
+{% if openbao_effective_tls_mode == 'native_acme' %}
+  tls_acme_ca_directory = "{{ openbao_native_acme_ca_directory }}"
+  tls_acme_test_ca_directory = "{{ openbao_native_acme_test_ca_directory }}"
+  tls_acme_cache_path = "{{ openbao_native_acme_cache_path }}"
+  tls_acme_ca_root = "{{ openbao_native_acme_ca_root }}"
+  tls_acme_email = "{{ openbao_native_acme_email }}"
+  tls_acme_domains = {{ openbao_native_acme_domains | to_json }}
+  tls_acme_eab_key_id = "{{ openbao_native_acme_effective_eab_key_id }}"
+  tls_acme_eab_mac_key = "{{ openbao_native_acme_effective_eab_mac_key }}"
+  tls_acme_disable_http_challenge = {{ (openbao_native_acme_challenge != 'http-01') | lower }}
+  tls_acme_disable_alpn_challenge = {{ (openbao_native_acme_challenge != 'tls-alpn-01') | lower }}
 {% else %}
   tls_cert_file = "{{ openbao_tls_cert_file }}"
   tls_key_file = "{{ openbao_tls_key_file }}"
@@ -60,9 +60,9 @@ listener "tcp" {
   }
 }
 
-{% if openbao_tls_mode == 'listener_acme' and openbao_listener_acme_bootstrap_api_enabled | bool %}
+{% if openbao_certificate_mode == 'native_acme' and openbao_native_acme_bootstrap_api_enabled | bool %}
 listener "tcp" {
-  address = "{{ openbao_listener_acme_bootstrap_api_address }}:{{ openbao_listener_acme_bootstrap_api_port }}"
+  address = "{{ openbao_native_acme_bootstrap_api_address }}:{{ openbao_native_acme_bootstrap_api_port }}"
   tls_min_version = "{{ openbao_tls_min_version }}"
   tls_disable_client_certs = {{ openbao_tls_disable_client_certs | bool | lower }}
   tls_cert_file = "{{ openbao_tls_cert_file }}"

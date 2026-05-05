@@ -3,7 +3,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths={{ openbao_config_dir }} {{ openbao_data_dir }} {{ openbao_log_dir }}{% if openbao_tls_mode == 'listener_acme' %} {{ openbao_listener_acme_cache_path }}{% endif %}
+ReadWritePaths={{ openbao_config_dir }} {{ openbao_data_dir }} {{ openbao_log_dir }}{% if openbao_certificate_mode == 'native_acme' %} {{ openbao_native_acme_cache_path }}{% endif %}
 StateDirectory=openbao
 LogsDirectory=openbao
 RuntimeDirectory=openbao

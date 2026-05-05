@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-COMPOSE_FILE="${ROOT_DIR}/compose.openbao-lab.yml"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+COMPOSE_FILE="${ROOT_DIR}/lab/compose.yml"
 OPENBAO_ARTIFACT_DIR="${ROOT_DIR}/secure-artifacts/lab/openbao"
 LAB_INPUT_DIR="${ROOT_DIR}/secure-artifacts/lab"
 BOOTSTRAP_DIR="${ROOT_DIR}/files/bootstrap-tls"
@@ -70,7 +70,7 @@ if [[ "${remove_inputs}" == true ]]; then
     "${BOOTSTRAP_DIR}/rhel10-ansible-2.key.pem" \
     "${BOOTSTRAP_DIR}/rhel10-ansible-3.fullchain.pem" \
     "${BOOTSTRAP_DIR}/rhel10-ansible-3.key.pem"
-  "${ROOT_DIR}/scripts/openbao-lab-generate-inputs.sh"
+  "${ROOT_DIR}/lab/scripts/openbao-lab-generate-inputs.sh"
 fi
 
 if [[ "${start_lab}" == true ]]; then
@@ -85,5 +85,5 @@ cat <<EOF
 OpenBao Docker lab reset complete.
 
 Next setup command:
-  scripts/openbao-lab-playbook.sh site
+  lab/scripts/openbao-lab-playbook.sh site
 EOF

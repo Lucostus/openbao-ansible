@@ -1,4 +1,4 @@
-{{ '{{' }} with secret "{{ openbao_pki_mount }}/issue/{{ openbao_agent_pki_role_name }}" "common_name={{ openbao_agent_cert_common_name }}" "alt_names={{ openbao_agent_cert_dns_names | unique | join(',') }}" "ttl={{ openbao_agent_cert_ttl }}"{% if openbao_agent_cert_ip_sans | length > 0 %} "ip_sans={{ openbao_agent_cert_ip_sans | unique | join(',') }}"{% endif %} -{{ '}}' }}
+{{ '{{' }} with secret "{{ openbao_pki_mount }}/issue/{{ openbao_agent_role_name }}" "common_name={{ openbao_agent_cert_common_name }}" "alt_names={{ openbao_agent_cert_dns_names | unique | join(',') }}" "ttl={{ openbao_agent_cert_ttl }}"{% if openbao_agent_cert_ip_sans | length > 0 %} "ip_sans={{ openbao_agent_cert_ip_sans | unique | join(',') }}"{% endif %} -{{ '}}' }}
 {{ '{{' }} .Data.private_key {{ '}}' }}
 {{ '{{' }} .Data.certificate {{ '}}' }}
 {{ '{{' }} .Data.issuing_ca {{ '}}' }}

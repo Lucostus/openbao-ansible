@@ -8,9 +8,9 @@ openbao_static_unseal_key_b64: "REPLACE_WITH_32_BYTE_BASE64_KEY"
 
 # Production best practice is an offline root CA. This project supports the
 # requested vaulted root CA flow so the OpenBao intermediate can be signed by
-# Ansible. Default agent_pki renewal derives per-node listener certificates
+# Ansible. Default OpenBao Agent renewal derives per-node listener certificates
 # from that intermediate; no additional vaulted ACME client secret is required.
-# First-run agent_pki listener certs are expected on each node by default, so
+# First-run Agent listener certs are expected on each node by default, so
 # private listener keys do not need to be vaulted or copied to the controller.
 openbao_root_ca_cert_pem: |
   -----BEGIN CERTIFICATE-----

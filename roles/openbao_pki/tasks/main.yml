@@ -174,8 +174,8 @@
     argv:
       - bao
       - write
-      - "{{ openbao_pki_mount }}/roles/{{ openbao_acme_role_name }}"
-      - "allowed_domains={{ openbao_acme_allowed_domains | join(',') }}"
+      - "{{ openbao_pki_mount }}/roles/{{ openbao_native_acme_role_name }}"
+      - "allowed_domains={{ openbao_native_acme_allowed_domains | join(',') }}"
       - "allow_bare_domains=true"
       - "allow_subdomains=false"
       - "allow_glob_domains=false"
@@ -192,7 +192,7 @@
   changed_when: false
   no_log: true
   run_once: true
-  when: openbao_acme_enabled | bool
+  when: openbao_native_acme_enabled | bool
 
 - name: Enable ACME with external account binding
   ansible.builtin.command:
@@ -201,40 +201,40 @@
       - write
       - "{{ openbao_pki_mount }}/config/acme"
       - "enabled=true"
-      - "default_directory_policy=role:{{ openbao_acme_role_name }}"
-      - "allowed_roles={{ openbao_acme_role_name }}"
+      - "default_directory_policy=role:{{ openbao_native_acme_role_name }}"
+      - "allowed_roles={{ openbao_native_acme_role_name }}"
       - "eab_policy=always-required"
   environment: "{{ openbao_pki_environment }}"
   delegate_to: "{{ openbao_pki_host }}"
   changed_when: false
   no_log: true
   run_once: true
-  when: openbao_acme_enabled | bool
+  when: openbao_native_acme_enabled | bool
 
-- name: Read listener ACME PKI role
+- name: Read native ACME PKI role
   ansible.builtin.command:
     argv:
       - bao
       - read
       - -format=json
-      - "{{ openbao_pki_mount }}/roles/{{ openbao_acme_role_name }}"
+      - "{{ openbao_pki_mount }}/roles/{{ openbao_native_acme_role_name }}"
   environment: "{{ openbao_pki_environment }}"
   delegate_to: "{{ openbao_pki_host }}"
   register: openbao_pki_acme_role_check
   changed_when: false
   no_log: true
   run_once: true
-  when: openbao_acme_enabled | bool
+  when: openbao_native_acme_enabled | bool
 
-- name: Assert listener ACME PKI role is configured
+- name: Assert native ACME PKI role is configured
   ansible.builtin.assert:
     that:
       - openbao_public_fqdn in (((openbao_pki_acme_role_check.stdout | from_json).data.allowed_domains | default([])) | string)
       - not ((openbao_pki_acme_role_check.stdout | from_json).data.no_store | bool)
       - (openbao_pki_acme_role_check.stdout | from_json).data.server_flag | bool
-    fail_msg: "OpenBao listener ACME PKI role is not configured for {{ openbao_public_fqdn }}."
+    fail_msg: "OpenBao native ACME PKI role is not configured for {{ openbao_public_fqdn }}."
   run_once: true
-  when: openbao_acme_enabled | bool
+  when: openbao_native_acme_enabled | bool
 
 - name: Read OpenBao ACME configuration
   ansible.builtin.command:
@@ -249,17 +249,17 @@
   changed_when: false
   no_log: true
   run_once: true
-  when: openbao_acme_enabled | bool
+  when: openbao_native_acme_enabled | bool
 
 - name: Assert OpenBao ACME configuration is enabled with EAB
   ansible.builtin.assert:
     that:
       - (openbao_pki_acme_config_check.stdout | from_json).data.enabled | bool
       - (openbao_pki_acme_config_check.stdout | from_json).data.eab_policy == 'always-required'
-      - openbao_acme_role_name in (((openbao_pki_acme_config_check.stdout | from_json).data.allowed_roles | default([])) | string)
-    fail_msg: "OpenBao ACME config must be enabled with eab_policy=always-required for {{ openbao_acme_role_name }}."
+      - openbao_native_acme_role_name in (((openbao_pki_acme_config_check.stdout | from_json).data.allowed_roles | default([])) | string)
+    fail_msg: "OpenBao ACME config must be enabled with eab_policy=always-required for {{ openbao_native_acme_role_name }}."
   run_once: true
-  when: openbao_acme_enabled | bool
+  when: openbao_native_acme_enabled | bool
 
 - name: Create missing EAB credentials for each OpenBao node
   ansible.builtin.include_tasks: create_eab.yml
@@ -267,7 +267,7 @@
   loop_control:
     loop_var: openbao_eab_host
   run_once: true
-  when: openbao_acme_enabled | bool
+  when: openbao_native_acme_enabled | bool
 
 - name: Check EAB artifacts for each OpenBao node
   ansible.builtin.stat:
@@ -277,15 +277,15 @@
   loop: "{{ groups[openbao_cluster_group] }}"
   register: openbao_pki_eab_artifacts
   run_once: true
-  when: openbao_acme_enabled | bool
+  when: openbao_native_acme_enabled | bool
 
 - name: Assert EAB artifacts exist for every OpenBao node
   ansible.builtin.assert:
     that:
       - openbao_pki_eab_artifacts.results | map(attribute='stat.exists') | select('equalto', true) | list | length == groups[openbao_cluster_group] | length
-    fail_msg: "Every OpenBao node needs a controller-side EAB artifact before listener ACME convergence."
+    fail_msg: "Every OpenBao node needs a controller-side EAB artifact before native ACME convergence."
   run_once: true
-  when: openbao_acme_enabled | bool
+  when: openbao_native_acme_enabled | bool
 
 - name: Read enabled auth methods
   ansible.builtin.command:
@@ -329,7 +329,7 @@
     - openbao_agent_enabled | bool
     - (openbao_agent_auth_mount ~ '/') not in ((openbao_auth_methods.stdout | from_json).keys() | list)
 
-- name: Configure per-node OpenBao agent PKI identities
+- name: Configure per-node OpenBao Agent certificate renewal identities
   ansible.builtin.include_tasks: configure_agent_identity.yml
   loop: "{{ groups[openbao_cluster_group] }}"
   loop_control:

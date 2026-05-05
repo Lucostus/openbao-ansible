@@ -6,8 +6,8 @@
   vars:
     openbao_validate_bootstrap_inputs: false
   pre_tasks:
-    - name: Load OpenBao variable files
-      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+    - name: Load OpenBao secret variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
   tasks:
     - name: Read current node status before upgrade
       ansible.builtin.command: bao status -format=json
@@ -187,8 +187,8 @@
   vars:
     openbao_validate_bootstrap_inputs: false
   pre_tasks:
-    - name: Load OpenBao variable files
-      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+    - name: Load OpenBao secret variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
   roles:
     - role: openbao_upgrade
       when: inventory_hostname in (groups.openbao_upgrade_standby_needing_change | default([]))
@@ -201,8 +201,8 @@
   vars:
     openbao_validate_bootstrap_inputs: false
   pre_tasks:
-    - name: Load OpenBao variable files
-      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+    - name: Load OpenBao secret variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
   roles:
     - role: openbao_upgrade
       when: inventory_hostname in (groups.openbao_upgrade_active_needing_change | default([]))
@@ -212,8 +212,8 @@
   become: true
   gather_facts: false
   pre_tasks:
-    - name: Load OpenBao variable files
-      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_vars.yml
+    - name: Load OpenBao secret variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
   tasks:
     - name: Confirm upgraded node status
       ansible.builtin.command: bao status -format=json

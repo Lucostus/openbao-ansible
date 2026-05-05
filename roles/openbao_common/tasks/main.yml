@@ -2,7 +2,7 @@
 - name: Set OpenBao package facts
   ansible.builtin.set_fact:
     openbao_package_prefix: "{{ openbao_package_prefix_overrides[openbao_version] | default('openbao') }}"
-    openbao_package_file: "{{ openbao_package_prefix_overrides[openbao_version] | default('openbao') }}_{{ openbao_version }}_linux_{{ openbao_arch }}.rpm"
+    openbao_package_file: "{{ openbao_package_prefix_overrides[openbao_version] | default('openbao') }}_{{ openbao_version }}_linux_{{ openbao_release_arch }}.rpm"
 
 - name: Run deployment preflight checks
   ansible.builtin.include_tasks: preflight.yml
@@ -10,6 +10,9 @@
 
 - name: Prepare operating system
   ansible.builtin.include_tasks: system.yml
+
+- name: Prepare native ACME cache when selected
+  ansible.builtin.include_tasks: native_acme_cache.yml
 
 - name: Install pinned OpenBao package
   ansible.builtin.include_tasks: install_package.yml
