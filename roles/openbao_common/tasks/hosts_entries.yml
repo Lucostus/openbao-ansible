@@ -1,0 +1,10 @@
+---
+- name: Add OpenBao peer host entries
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "{{ hostvars[item].openbao_node_ip | default(hostvars[item].ansible_host) }} {{ hostvars[item].openbao_node_fqdn }}"
+    regexp: "\\s{{ hostvars[item].openbao_node_fqdn | regex_escape }}$"
+    state: present
+    unsafe_writes: true
+  loop: "{{ groups[openbao_cluster_group] }}"
+  when: openbao_manage_hosts_entries | bool

@@ -39,11 +39,11 @@
         )
       }}
 
-- name: Assert node bootstrap TLS is only used for Agent certificate renewal
+- name: Assert node bootstrap TLS is only used for Agent or bootstrap certificate modes
   ansible.builtin.assert:
     that:
-      - openbao_certificate_mode == 'agent'
-    fail_msg: "openbao_bootstrap_tls_source=node is supported only with openbao_certificate_mode=agent."
+      - openbao_certificate_mode in ['agent', 'bootstrap']
+    fail_msg: "openbao_bootstrap_tls_source=node is supported only with openbao_certificate_mode=agent or bootstrap."
   when: openbao_bootstrap_tls_source == 'node'
 
 - name: Assert bootstrap chain append is only used with node bootstrap TLS

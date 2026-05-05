@@ -8,6 +8,8 @@ ready for operators to run against the three RHEL hosts in group `rhel10`.
 ## Defaults
 
 - Preferred certificate renewal: OpenBao Agent.
+- Supported non-Agent start: `openbao_certificate_mode=bootstrap`, using the
+  provided listener cert/key until an operator later switches to Agent.
 - Advanced fallback: native OpenBao listener ACME.
 - Operator inputs live in `group_vars/rhel10/main.yml`.
 - Low-level defaults live in `group_vars/all/openbao_defaults.yml`.

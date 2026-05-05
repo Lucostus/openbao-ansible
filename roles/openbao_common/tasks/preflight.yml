@@ -11,7 +11,7 @@
     that:
       - openbao_certificate_mode in ['agent', 'native_acme', 'bootstrap']
       - openbao_bootstrap_tls_source in ['controller', 'node']
-      - openbao_bootstrap_tls_source != 'node' or openbao_certificate_mode == 'agent'
+      - openbao_bootstrap_tls_source != 'node' or openbao_certificate_mode in ['agent', 'bootstrap']
       - openbao_native_acme_challenge in ['http-01', 'tls-alpn-01']
       - openbao_native_acme_cache_mode in ['nfs', 'pre_mounted']
       - openbao_certificate_mode != 'native_acme' or openbao_native_acme_enabled | bool

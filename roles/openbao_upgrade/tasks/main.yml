@@ -146,3 +146,8 @@
   when:
     - openbao_agent_enabled | bool
     - openbao_package_upgrade_required | bool
+
+- name: Mark OpenBao node upgrade as completed
+  ansible.builtin.group_by:
+    key: openbao_upgrade_completed
+  when: openbao_package_upgrade_required | bool

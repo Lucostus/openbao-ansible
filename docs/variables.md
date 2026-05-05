@@ -57,12 +57,59 @@ openbao_certificate_mode: native_acme # advanced fallback
 openbao_certificate_mode: bootstrap   # bootstrap TLS only
 ```
 
+`agent` installs OpenBao Agent after the cluster and PKI are ready. The Agent
+uses per-node AppRole credentials to issue listener certificates from OpenBao
+PKI and replaces the bootstrap listener cert/key pair.
+
+`bootstrap` deploys OpenBao with only the supplied listener certificates. It
+does not create per-node Agent AppRole artifacts, install `openbao-agent`, or
+rotate listener certificates. This is useful when the first deployment should
+depend only on cert/key material that already exists on the nodes.
+
+`native_acme` keeps OpenBao listener ACME available as an advanced fallback.
+See `docs/native-listener-acme.md`.
+
 Bootstrap TLS sources:
 
 ```yaml
-openbao_bootstrap_tls_source: node       # default for agent mode
+openbao_bootstrap_tls_source: node       # default for agent and bootstrap modes
 openbao_bootstrap_tls_source: controller # lab or fallback
 ```
+
+`node` reads first-run cert/key material from each managed node. By default the
+role auto-detects files under `openbao_node_bootstrap_tls_dir`; explicit paths
+can be set with `openbao_node_bootstrap_tls_cert` and
+`openbao_node_bootstrap_tls_key`.
+
+`controller` reads cert/key material from the Ansible controller using
+`openbao_controller_bootstrap_tls_cert` and
+`openbao_controller_bootstrap_tls_key`. The Docker lab uses this path.
+
+## Bootstrap First, Agent Later
+
+Start without Agent:
+
+```yaml
+openbao_certificate_mode: bootstrap
+openbao_bootstrap_tls_source: node
+openbao_node_bootstrap_tls_dir: /usr/local/lib/cockpitcert
+```
+
+Later enable Agent renewal by changing only:
+
+```yaml
+openbao_certificate_mode: agent
+```
+
+Then rerun:
+
+```bash
+ansible-playbook playbooks/site.yml
+```
+
+The rerun reuses the initialized cluster and existing OpenBao PKI, creates any
+missing per-node Agent AppRole artifacts, installs `openbao-agent`, and replaces
+the bootstrap listener certs with Agent-issued certs.
 
 ## Renamed Variables
 

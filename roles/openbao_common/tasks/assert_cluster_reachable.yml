@@ -1,0 +1,34 @@
+---
+- name: Check Ansible connectivity to every OpenBao node
+  ansible.builtin.ping:
+  register: openbao_cluster_connection_check
+  changed_when: false
+  failed_when: false
+  ignore_unreachable: true
+
+- name: Initialize unreachable OpenBao node list
+  ansible.builtin.set_fact:
+    openbao_cluster_unreachable_nodes: []
+  run_once: true
+  delegate_to: localhost
+  become: false
+
+- name: Add unreachable OpenBao nodes to failure list
+  ansible.builtin.set_fact:
+    openbao_cluster_unreachable_nodes: "{{ openbao_cluster_unreachable_nodes + [item] }}"
+  loop: "{{ groups[openbao_cluster_group] }}"
+  when: hostvars[item].openbao_cluster_connection_check.ping | default('') != 'pong'
+  run_once: true
+  delegate_to: localhost
+  become: false
+
+- name: Assert every OpenBao node is reachable
+  ansible.builtin.assert:
+    that:
+      - openbao_cluster_unreachable_nodes | length == 0
+    fail_msg: >-
+      All OpenBao nodes must be reachable before this playbook can continue.
+      Unreachable nodes: {{ openbao_cluster_unreachable_nodes | join(', ') }}.
+  run_once: true
+  delegate_to: localhost
+  become: false

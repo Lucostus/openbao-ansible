@@ -1,8 +1,21 @@
 ---
+- name: Verify OpenBao nodes are reachable before deployment
+  hosts: rhel10
+  become: false
+  gather_facts: false
+  any_errors_fatal: true
+  pre_tasks:
+    - name: Load OpenBao variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
+  tasks:
+    - name: Assert OpenBao node connectivity
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/assert_cluster_reachable.yml
+
 - name: Prepare OpenBao servers and configure PKI
   hosts: rhel10
   become: true
   gather_facts: true
+  any_errors_fatal: true
   vars:
     openbao_validate_bootstrap_inputs: true
   pre_tasks:
@@ -18,6 +31,7 @@
   hosts: rhel10
   become: true
   gather_facts: false
+  any_errors_fatal: true
   serial: 1
   vars:
     openbao_validate_bootstrap_inputs: false
@@ -32,6 +46,7 @@
   hosts: rhel10
   become: true
   gather_facts: false
+  any_errors_fatal: true
   serial: 1
   vars:
     openbao_validate_bootstrap_inputs: false
@@ -48,6 +63,7 @@
   hosts: rhel10
   become: true
   gather_facts: false
+  any_errors_fatal: true
   vars:
     openbao_validate_bootstrap_inputs: false
   pre_tasks:

@@ -7,6 +7,36 @@ intermediate, and OpenBao Agent listener certificate renewal.
 OpenBao Agent renewal is the default path. Native listener ACME is retained as
 an advanced fallback and documented separately.
 
+## Bootstrap First, Agent Later
+
+For an initial deployment without OpenBao Agent, keep using the supplied
+listener certificates:
+
+```yaml
+openbao_certificate_mode: bootstrap
+openbao_bootstrap_tls_source: node
+openbao_node_bootstrap_tls_dir: /usr/local/lib/cockpitcert
+```
+
+This deploys OpenBao HA, configures PKI, and leaves the listener on the
+bootstrap cert/key pair without installing `openbao-agent`.
+
+Later, enable Agent renewal by changing only:
+
+```yaml
+openbao_certificate_mode: agent
+```
+
+Then rerun:
+
+```bash
+ansible-playbook playbooks/site.yml --ask-vault-pass
+```
+
+The rerun does not reinitialize OpenBao. It reuses the existing PKI, creates
+missing Agent AppRole artifacts, starts `openbao-agent`, and replaces the
+bootstrap listener certificates with Agent-issued certificates.
+
 ## Configure
 
 Edit the small site input file:
@@ -36,8 +66,9 @@ Required vaulted values:
 - `openbao_root_ca_key_pem`: root CA key for signing the OpenBao intermediate.
 
 By default, first-run listener cert/key material is expected on each node under
-`/usr/local/lib/cockpitcert`. Ansible copies it locally on the node into
-`/etc/openbao.d/tls`; private keys are not copied back to the controller.
+`/usr/local/lib/cockpitcert` for both `agent` and `bootstrap` modes. Ansible
+copies it locally on the node into `/etc/openbao.d/tls`; private keys are not
+copied back to the controller.
 
 ## Deploy
 

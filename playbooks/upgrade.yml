@@ -1,14 +1,30 @@
 ---
+- name: Verify OpenBao nodes are reachable before rolling upgrade
+  hosts: rhel10
+  become: false
+  gather_facts: false
+  any_errors_fatal: true
+  pre_tasks:
+    - name: Load OpenBao variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
+  tasks:
+    - name: Assert OpenBao node connectivity
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/assert_cluster_reachable.yml
+
 - name: Classify OpenBao nodes before rolling upgrade
   hosts: rhel10
   become: true
   gather_facts: true
+  any_errors_fatal: true
   vars:
     openbao_validate_bootstrap_inputs: false
   pre_tasks:
     - name: Load OpenBao secret variables
       ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
   tasks:
+    - name: Converge OpenBao peer host entries before upgrade checks
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/hosts_entries.yml
+
     - name: Read current node status before upgrade
       ansible.builtin.command: bao status -format=json
       environment:
@@ -183,6 +199,7 @@
   hosts: rhel10
   become: true
   gather_facts: true
+  any_errors_fatal: true
   serial: 1
   vars:
     openbao_validate_bootstrap_inputs: false
@@ -193,10 +210,36 @@
     - role: openbao_upgrade
       when: inventory_hostname in (groups.openbao_upgrade_standby_needing_change | default([]))
 
+- name: Confirm standby upgrades completed before active node
+  hosts: localhost
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Assert every required standby upgrade completed
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              (groups.openbao_upgrade_standby_needing_change | default([]))
+              | difference(groups.openbao_upgrade_completed | default([]))
+            )
+            | length == 0
+        fail_msg: >-
+          Refusing to upgrade the active OpenBao node because these standby
+          nodes did not complete successfully:
+          {{
+            (
+              (groups.openbao_upgrade_standby_needing_change | default([]))
+              | difference(groups.openbao_upgrade_completed | default([]))
+            )
+            | join(', ')
+          }}.
+
 - name: Upgrade active node needing version change last
   hosts: rhel10
   become: true
   gather_facts: true
+  any_errors_fatal: true
   serial: 1
   vars:
     openbao_validate_bootstrap_inputs: false
@@ -207,10 +250,36 @@
     - role: openbao_upgrade
       when: inventory_hostname in (groups.openbao_upgrade_active_needing_change | default([]))
 
+- name: Confirm every required upgrade completed
+  hosts: localhost
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Assert every required OpenBao upgrade completed
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              (groups.openbao_upgrade_needing_change | default([]))
+              | difference(groups.openbao_upgrade_completed | default([]))
+            )
+            | length == 0
+        fail_msg: >-
+          Refusing final validation because these OpenBao nodes did not
+          complete their upgrade:
+          {{
+            (
+              (groups.openbao_upgrade_needing_change | default([]))
+              | difference(groups.openbao_upgrade_completed | default([]))
+            )
+            | join(', ')
+          }}.
+
 - name: Validate upgraded OpenBao cluster
   hosts: rhel10
   become: true
   gather_facts: false
+  any_errors_fatal: true
   pre_tasks:
     - name: Load OpenBao secret variables
       ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
