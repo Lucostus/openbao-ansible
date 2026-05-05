@@ -83,6 +83,11 @@
       register: openbao_upgrade_leader_status
       changed_when: false
       failed_when: false
+      until:
+        - openbao_upgrade_leader_status.rc == 0
+        - openbao_upgrade_leader_status.stdout | length > 0
+      retries: 12
+      delay: 5
 
     - name: Assert node leader status is readable
       ansible.builtin.assert:
@@ -213,6 +218,20 @@
     - role: openbao_upgrade
       when: inventory_hostname in (groups.openbao_upgrade_standby_needing_change | default([]))
 
+- name: Validate Raft after standby upgrades
+  hosts: rhel10
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    openbao_validate_bootstrap_inputs: false
+  pre_tasks:
+    - name: Load OpenBao secret variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
+  tasks:
+    - name: Validate OpenBao Raft health after standby upgrades
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/validate_raft_health.yml
+
 - name: Confirm standby upgrades completed before active node
   hosts: localhost
   gather_facts: false
@@ -237,20 +256,6 @@
             )
             | join(', ')
           }}.
-
-- name: Validate Raft after standby upgrades
-  hosts: rhel10
-  become: true
-  gather_facts: false
-  any_errors_fatal: true
-  vars:
-    openbao_validate_bootstrap_inputs: false
-  pre_tasks:
-    - name: Load OpenBao secret variables
-      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
-  tasks:
-    - name: Validate OpenBao Raft health after standby upgrades
-      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/validate_raft_health.yml
 
 - name: Upgrade active node needing version change last
   hosts: rhel10

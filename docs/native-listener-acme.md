@@ -1,8 +1,9 @@
 # Native Listener ACME
 
-OpenBao Agent certificate renewal is the preferred path for this repository.
-Native listener ACME is retained as an advanced fallback for environments that
-explicitly need OpenBao's ACME listener behavior.
+Bootstrap listener TLS is the default path for this repository, with OpenBao
+Agent available later for renewal. Native listener ACME is retained as an
+advanced fallback for environments that explicitly need OpenBao's ACME listener
+behavior.
 
 Enable it explicitly:
 

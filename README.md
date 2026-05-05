@@ -1,16 +1,17 @@
 # OpenBao HA Ansible Deployment
 
 This repository deploys a three-node OpenBao HA cluster on RHEL with integrated
-Raft storage, TLS, static auto-unseal, audit logging, an OpenBao-managed PKI
-intermediate, and OpenBao Agent listener certificate renewal.
+Raft storage, TLS, static auto-unseal, audit logging, and an OpenBao-managed
+PKI intermediate.
 
-OpenBao Agent renewal is the default path. Native listener ACME is retained as
-an advanced fallback and documented separately.
+Bootstrap listener TLS is the default fresh production path. OpenBao Agent
+renewal can be enabled later by changing one variable. Native listener ACME is
+retained as an advanced fallback and documented separately.
 
 ## Bootstrap First, Agent Later
 
-For an initial deployment without OpenBao Agent, keep using the supplied
-listener certificates:
+The default deployment starts without OpenBao Agent and keeps using the
+supplied listener certificates:
 
 ```yaml
 openbao_certificate_mode: bootstrap
@@ -19,7 +20,7 @@ openbao_node_bootstrap_tls_dir: /usr/local/lib/cockpitcert
 ```
 
 This deploys OpenBao HA, configures PKI, and leaves the listener on the
-bootstrap cert/key pair without installing `openbao-agent`.
+bootstrap cert/key pair without installing or starting `openbao-agent`.
 
 Later, enable Agent renewal by changing only:
 
@@ -84,8 +85,9 @@ Deploy the cluster:
 ansible-playbook playbooks/site.yml --ask-vault-pass
 ```
 
-Generated init output and per-node OpenBao Agent AppRole artifacts are stored
-under `secure-artifacts/` on the controller.
+Generated init output is stored under `secure-artifacts/` on the controller.
+Per-node OpenBao Agent AppRole artifacts are created there only when
+`openbao_certificate_mode` is `agent`.
 
 ## Upgrade
 
@@ -95,8 +97,9 @@ Change only `openbao_version`, then run:
 ansible-playbook playbooks/upgrade.yml --ask-vault-pass
 ```
 
-The upgrade playbook rejects downgrades, snapshots Raft before package changes,
-upgrades standby nodes before the active node, and validates the desired version.
+The upgrade playbook rejects downgrades, validates Raft membership, snapshots
+Raft before package changes, upgrades standby nodes before the active node, and
+validates the desired version.
 
 ## Validate
 

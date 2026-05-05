@@ -52,19 +52,18 @@ environment requires it.
 ## Certificate Modes
 
 ```yaml
-openbao_certificate_mode: agent       # default, preferred
+openbao_certificate_mode: bootstrap   # default, provided listener TLS only
+openbao_certificate_mode: agent       # later Agent-managed renewal
 openbao_certificate_mode: native_acme # advanced fallback
-openbao_certificate_mode: bootstrap   # bootstrap TLS only
 ```
+
+`bootstrap` deploys OpenBao with only the supplied listener certificates. It
+does not create per-node Agent AppRole artifacts, install `openbao-agent`, or
+rotate listener certificates. This is the default fresh production path.
 
 `agent` installs OpenBao Agent after the cluster and PKI are ready. The Agent
 uses per-node AppRole credentials to issue listener certificates from OpenBao
 PKI and replaces the bootstrap listener cert/key pair.
-
-`bootstrap` deploys OpenBao with only the supplied listener certificates. It
-does not create per-node Agent AppRole artifacts, install `openbao-agent`, or
-rotate listener certificates. This is useful when the first deployment should
-depend only on cert/key material that already exists on the nodes.
 
 `native_acme` keeps OpenBao listener ACME available as an advanced fallback.
 See `docs/native-listener-acme.md`.
@@ -87,7 +86,7 @@ can be set with `openbao_node_bootstrap_tls_cert` and
 
 ## Bootstrap First, Agent Later
 
-Start without Agent:
+Start with the default bootstrap-only mode:
 
 ```yaml
 openbao_certificate_mode: bootstrap

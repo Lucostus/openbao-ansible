@@ -11,6 +11,21 @@
     - name: Assert OpenBao node connectivity
       ansible.builtin.import_tasks: ../roles/openbao_common/tasks/assert_cluster_reachable.yml
 
+- name: Disable OpenBao Agent when Agent renewal is not selected
+  hosts: rhel10
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    openbao_validate_bootstrap_inputs: false
+  pre_tasks:
+    - name: Load OpenBao variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
+  tasks:
+    - name: Stop and disable OpenBao Agent
+      ansible.builtin.import_tasks: ../roles/openbao_agent/tasks/disable.yml
+      when: not (openbao_agent_enabled | bool)
+
 - name: Prepare OpenBao servers and configure PKI
   hosts: rhel10
   become: true
@@ -86,3 +101,17 @@
       retries: 12
       delay: 10
       when: openbao_certificate_mode == 'native_acme'
+
+- name: Validate OpenBao deployment
+  hosts: rhel10
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    openbao_validate_bootstrap_inputs: false
+  pre_tasks:
+    - name: Load OpenBao secret variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
+  tasks:
+    - name: Validate final OpenBao site state
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/validate_site.yml

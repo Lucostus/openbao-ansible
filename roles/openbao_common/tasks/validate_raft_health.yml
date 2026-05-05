@@ -106,15 +106,13 @@
   until:
     - openbao_raft_health_peers.rc == 0
     - >-
-      not (openbao_raft_health_wait_for_convergence | default(false) | bool)
-      or (
+      (
         (openbao_raft_health_peers.stdout | default('{}', true) | from_json)
         .data.config.servers | default([])
       )
       | length == openbao_raft_expected_server_ids | length
     - >-
-      not (openbao_raft_health_wait_for_convergence | default(false) | bool)
-      or (
+      (
         (openbao_raft_health_peers.stdout | default('{}', true) | from_json)
         .data.config.servers | default([])
         | selectattr('voter', 'equalto', true)

@@ -15,7 +15,7 @@ openbao_nodes:
     fqdn: bao3.lab.local
     ip: 10.89.10.13
 
-openbao_certificate_mode: agent
+openbao_certificate_mode: bootstrap
 openbao_bootstrap_tls_source: controller
 openbao_pki_cluster_path: "https://{{ openbao_public_fqdn }}:8300/v1/{{ openbao_pki_mount }}"
 openbao_pki_cluster_aia_path: "{{ openbao_public_api_addr }}/v1/{{ openbao_pki_mount }}"

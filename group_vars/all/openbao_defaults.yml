@@ -51,7 +51,7 @@ openbao_cli_addr: "https://{{ openbao_node_fqdn }}:{{ openbao_listener_port }}"
 openbao_raft_leader_tls_servername: "{{ openbao_tls_server_name }}"
 openbao_lb_mode: tcp_passthrough
 
-openbao_certificate_mode: agent
+openbao_certificate_mode: bootstrap
 openbao_bootstrap_tls_source: "{{ 'node' if openbao_certificate_mode in ['agent', 'bootstrap'] else 'controller' }}"
 openbao_controller_bootstrap_tls_cert: "{{ playbook_dir }}/../files/bootstrap-tls/{{ inventory_hostname }}.fullchain.pem"
 openbao_controller_bootstrap_tls_key: "{{ playbook_dir }}/../files/bootstrap-tls/{{ inventory_hostname }}.key.pem"

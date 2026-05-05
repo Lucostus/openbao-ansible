@@ -79,9 +79,7 @@
   retries: 60
   delay: 5
 
-- name: Validate OpenBao Raft health
+- name: Validate OpenBao Raft health after bootstrap
   ansible.builtin.include_role:
     name: openbao_common
     tasks_from: validate_raft_health
-  vars:
-    openbao_raft_health_wait_for_convergence: true

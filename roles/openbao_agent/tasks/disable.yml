@@ -1,0 +1,10 @@
+---
+- name: Gather service facts for OpenBao agent disable
+  ansible.builtin.service_facts:
+
+- name: Stop and disable OpenBao agent when not selected
+  ansible.builtin.systemd:
+    name: openbao-agent
+    enabled: false
+    state: stopped
+  when: "'openbao-agent.service' in ansible_facts.services"

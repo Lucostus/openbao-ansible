@@ -1,0 +1,86 @@
+---
+- name: Read final OpenBao node status
+  ansible.builtin.command: bao status -format=json
+  environment:
+    BAO_ADDR: "{{ openbao_cli_addr }}"
+    VAULT_ADDR: "{{ openbao_cli_addr }}"
+    BAO_CACERT: "{{ openbao_ca_cert_file }}"
+    VAULT_CACERT: "{{ openbao_ca_cert_file }}"
+    BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+    VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+  register: openbao_site_final_status
+  changed_when: false
+  failed_when: false
+
+- name: Set final OpenBao node status facts
+  ansible.builtin.set_fact:
+    openbao_site_final_status_data: >-
+      {{ openbao_site_final_status.stdout | default('{}', true) | from_json }}
+
+- name: Assert final OpenBao node health
+  ansible.builtin.assert:
+    that:
+      - openbao_site_final_status.rc == 0
+      - openbao_site_final_status_data.initialized | default(false) | bool
+      - not (openbao_site_final_status_data.sealed | default(true) | bool)
+      - openbao_site_final_status_data.version | default('') == openbao_version
+    fail_msg: >-
+      OpenBao must be initialized, unsealed, and running {{ openbao_version }}
+      on {{ inventory_hostname }} after site convergence.
+
+- name: Set final listener certificate validation names
+  ansible.builtin.set_fact:
+    openbao_site_listener_validation_names: >-
+      {{
+        (
+          openbao_native_acme_domains
+          if openbao_certificate_mode == 'native_acme'
+          else [openbao_public_fqdn, openbao_node_fqdn]
+        ) | unique | list
+      }}
+
+- name: Validate OpenBao listener certificate names
+  ansible.builtin.shell: >-
+    timeout 10 openssl s_client
+    -connect {{ (openbao_node_fqdn ~ ':' ~ openbao_listener_port) | quote }}
+    -servername {{ item | quote }}
+    -verify_hostname {{ item | quote }}
+    -CAfile {{ openbao_ca_cert_file | quote }}
+    -verify_return_error
+    -brief
+    < /dev/null
+  loop: "{{ openbao_site_listener_validation_names }}"
+  register: openbao_site_listener_cert_check
+  changed_when: false
+  until: openbao_site_listener_cert_check.rc == 0
+  retries: 12
+  delay: 10
+
+- name: Gather service facts for OpenBao agent validation
+  ansible.builtin.service_facts:
+
+- name: Set OpenBao agent service state fact
+  ansible.builtin.set_fact:
+    openbao_site_agent_service_state: >-
+      {{
+        (ansible_facts.services.get('openbao-agent.service', {})).get(
+          'state',
+          'not-found'
+        )
+      }}
+
+- name: Assert OpenBao agent is active in Agent mode
+  ansible.builtin.assert:
+    that:
+      - openbao_site_agent_service_state == 'running'
+    fail_msg: "openbao-agent must be active when openbao_certificate_mode=agent."
+  when: openbao_agent_enabled | bool
+
+- name: Assert OpenBao agent is inactive outside Agent mode
+  ansible.builtin.assert:
+    that:
+      - openbao_site_agent_service_state != 'running'
+    fail_msg: >-
+      openbao-agent must not be active when openbao_certificate_mode={{
+      openbao_certificate_mode }}.
+  when: not (openbao_agent_enabled | bool)
