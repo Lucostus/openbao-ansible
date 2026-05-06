@@ -7,6 +7,7 @@
     group: "{{ openbao_service_group }}"
     mode: "0644"
   no_log: true
+  when: openbao_tls_trust_source == 'variable'
 
 - name: Resolve bootstrap TLS source inputs
   ansible.builtin.include_tasks: resolve_bootstrap_tls.yml

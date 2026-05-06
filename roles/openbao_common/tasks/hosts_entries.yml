@@ -1,8 +1,20 @@
 ---
+- name: Assert managed OpenBao peer host entries have explicit IPs
+  ansible.builtin.assert:
+    that:
+      - hostvars[item].openbao_node_ip | default('') | length > 0
+    fail_msg: >-
+      openbao_manage_hosts_entries=true requires an explicit openbao_node_ip
+      for {{ item }}. DNS-only inventories should set
+      openbao_manage_hosts_entries=false.
+  loop: "{{ groups[openbao_cluster_group] }}"
+  run_once: true
+  when: openbao_manage_hosts_entries | bool
+
 - name: Add OpenBao peer host entries
   ansible.builtin.lineinfile:
     path: /etc/hosts
-    line: "{{ hostvars[item].openbao_node_ip | default(hostvars[item].ansible_host) }} {{ hostvars[item].openbao_node_fqdn }}"
+    line: "{{ hostvars[item].openbao_node_ip }} {{ hostvars[item].openbao_node_fqdn }}"
     regexp: "\\s{{ hostvars[item].openbao_node_fqdn | regex_escape }}$"
     state: present
     unsafe_writes: true

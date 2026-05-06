@@ -9,7 +9,8 @@ openbao_version: "x.y.z"
 Then run:
 
 ```bash
-ansible-playbook playbooks/upgrade.yml --ask-vault-pass
+ansible-playbook -i inventory/openbao.yml playbooks/upgrade.yml \
+  -e openbao_target_group=openbao-prod
 ```
 
 The upgrade playbook:
@@ -26,7 +27,8 @@ The upgrade playbook:
 - stops final validation if any required node upgrade did not complete
 - validates every node is unsealed and running `openbao_version`
 
-Snapshots are fetched to `secure-artifacts/` on the controller.
+Snapshots are fetched to the selected environment's `secure-artifacts/`
+directory on the controller.
 
 ## Failure And Rerun Behavior
 
@@ -47,7 +49,7 @@ Common recovery steps:
 - start or reconnect an unreachable node
 - restart or unseal an unhealthy node
 - repair Raft membership manually when peer IDs or addresses drift
-- rerun `ansible-playbook playbooks/upgrade.yml --ask-vault-pass`
+- rerun the same `ansible-playbook ... playbooks/upgrade.yml` command
 
 No rollback is attempted by Ansible. Use the saved Raft snapshot only for
 operator-led recovery.

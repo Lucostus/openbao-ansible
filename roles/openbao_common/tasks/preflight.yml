@@ -12,15 +12,21 @@
       - openbao_certificate_mode in ['agent', 'native_acme', 'bootstrap']
       - openbao_bootstrap_tls_source in ['controller', 'node']
       - openbao_bootstrap_tls_source != 'node' or openbao_certificate_mode in ['agent', 'bootstrap']
+      - openbao_static_seal_source in ['generated_artifact', 'variable']
+      - openbao_tls_trust_source in ['system', 'variable', 'file']
+      - openbao_pki_signing_source in ['variable']
+      - not (openbao_agent_enabled | bool) or openbao_pki_enabled | bool
+      - not (openbao_native_acme_enabled | bool) or openbao_pki_enabled | bool
       - openbao_native_acme_challenge in ['http-01', 'tls-alpn-01']
       - openbao_native_acme_cache_mode in ['nfs', 'pre_mounted']
       - openbao_certificate_mode != 'native_acme' or openbao_native_acme_enabled | bool
       - openbao_lb_mode in ['tcp_passthrough', 'tls_termination', 'none']
       - openbao_public_fqdn | length > 0
       - openbao_node_fqdn | length > 0
+      - openbao_ca_cert_file is match('^/')
       - not (openbao_native_acme_bootstrap_api_enabled | bool) or openbao_native_acme_bootstrap_api_port | int != openbao_listener_port | int
       - not (openbao_native_acme_bootstrap_api_enabled | bool) or openbao_native_acme_bootstrap_api_port | int != openbao_cluster_port | int
-    fail_msg: "OpenBao TLS/LB/ACME variables are invalid; check group_vars/rhel10/main.yml."
+    fail_msg: "OpenBao TLS/LB/ACME variables are invalid; check the selected group_vars main.yml."
 
 - name: Assert advertised OpenBao addresses match the TLS listener
   ansible.builtin.assert:
@@ -92,9 +98,27 @@
       - ansible_facts.service_mgr == 'systemd'
     fail_msg: "This playbook is written for RHEL-family hosts using systemd."
 
+- name: Assert selected OpenBao node FQDNs are unique
+  ansible.builtin.assert:
+    that:
+      - openbao_peer_fqdns | unique | length == groups[openbao_cluster_group] | length
+    fail_msg: >-
+      OpenBao node FQDNs must be unique. Current openbao_node_fqdn values are:
+      {{ openbao_peer_fqdns | join(', ') }}.
+  vars:
+    openbao_peer_fqdns: >-
+      {{
+        groups[openbao_cluster_group]
+        | map('extract', hostvars, 'openbao_node_fqdn')
+        | map('string')
+        | list
+      }}
+  run_once: true
+
 - name: Assert managed peer addresses are unique and routable
   ansible.builtin.assert:
     that:
+      - openbao_peer_host_entry_ips | reject('equalto', '') | list | length == groups[openbao_cluster_group] | length
       - openbao_peer_host_entry_ips | unique | length == groups[openbao_cluster_group] | length
     fail_msg: >-
       OpenBao Raft requires a unique routable peer address for every node when
@@ -114,19 +138,54 @@
   run_once: true
   when: openbao_manage_hosts_entries | bool
 
+- name: Validate peer FQDN resolution when host entries are unmanaged
+  ansible.builtin.command:
+    argv:
+      - getent
+      - hosts
+      - "{{ hostvars[item].openbao_node_fqdn }}"
+  loop: "{{ groups[openbao_cluster_group] }}"
+  register: openbao_peer_dns_resolution
+  changed_when: false
+  failed_when: openbao_peer_dns_resolution.rc != 0
+  when: not (openbao_manage_hosts_entries | bool)
+
 - name: Resolve bootstrap TLS source inputs
   ansible.builtin.include_tasks: resolve_bootstrap_tls.yml
 
-- name: Assert static unseal key and root CA variables are present
+- name: Assert variable static unseal key is present
   ansible.builtin.assert:
     that:
       - openbao_static_unseal_key_b64 is defined
+    fail_msg: "openbao_static_seal_source=variable requires openbao_static_unseal_key_b64."
+  no_log: true
+  when: openbao_static_seal_source == 'variable'
+
+- name: Assert variable TLS trust certificate is present
+  ansible.builtin.assert:
+    that:
+      - openbao_root_ca_cert_pem is defined
+      - "'BEGIN CERTIFICATE' in openbao_root_ca_cert_pem"
+    fail_msg: "openbao_tls_trust_source=variable requires openbao_root_ca_cert_pem."
+  no_log: true
+  when: openbao_tls_trust_source == 'variable'
+
+- name: Assert variable PKI signing inputs are present
+  ansible.builtin.assert:
+    that:
       - openbao_root_ca_cert_pem is defined
       - openbao_root_ca_key_pem is defined
       - "'BEGIN CERTIFICATE' in openbao_root_ca_cert_pem"
       - "'BEGIN' in openbao_root_ca_key_pem"
-    fail_msg: "Vaulted static seal key and root CA variables are required."
+    fail_msg: >-
+      openbao_pki_enabled=true with openbao_pki_signing_source=variable
+      requires openbao_root_ca_cert_pem and openbao_root_ca_key_pem. Bootstrap
+      mode skips PKI by default; provide a signing source before enabling
+      Agent or native ACME certificate renewal.
   no_log: true
+  when:
+    - openbao_pki_enabled | bool
+    - openbao_pki_signing_source == 'variable'
 
 - name: Validate static unseal key length
   ansible.builtin.command:
@@ -141,6 +200,7 @@
     OPENBAO_STATIC_KEY_B64: "{{ openbao_static_unseal_key_b64 }}"
   changed_when: false
   no_log: true
+  when: openbao_static_seal_source == 'variable'
 
 - name: Assert shared-name native ACME HTTP challenge routing is confirmed
   ansible.builtin.assert:

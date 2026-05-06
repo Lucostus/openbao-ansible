@@ -3,17 +3,39 @@
   ansible.builtin.include_vars:
     file: "{{ playbook_dir }}/../group_vars/all/openbao_defaults.yml"
 
-- name: Load OpenBao site variables
-  ansible.builtin.include_vars:
-    file: "{{ playbook_dir }}/../group_vars/rhel10/main.yml"
-
-- name: Set OpenBao secret variable file path
+- name: Set OpenBao target variable file paths
   ansible.builtin.set_fact:
+    openbao_effective_target_group: "{{ openbao_target_group | default('rhel10') }}"
+    openbao_effective_site_vars_file: >-
+      {{
+        openbao_site_vars_file
+        | default(playbook_dir ~ '/../group_vars/' ~ (openbao_target_group | default('rhel10')) ~ '/main.yml')
+      }}
     openbao_effective_secret_vars_file: >-
       {{
         openbao_secret_vars_file
-        | default(playbook_dir ~ '/../group_vars/rhel10/vault.yml')
+        | default(playbook_dir ~ '/../group_vars/' ~ (openbao_target_group | default('rhel10')) ~ '/vault.yml')
       }}
+
+- name: Check for OpenBao site variables
+  ansible.builtin.stat:
+    path: "{{ openbao_effective_site_vars_file }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_common_site_vars_stat
+
+- name: Assert OpenBao site variables exist
+  ansible.builtin.assert:
+    that:
+      - openbao_common_site_vars_stat.stat.exists | default(false)
+    fail_msg: >-
+      Missing OpenBao site variables for target group
+      {{ openbao_effective_target_group }}. Create
+      {{ openbao_effective_site_vars_file }} or set openbao_site_vars_file.
+
+- name: Load OpenBao site variables
+  ansible.builtin.include_vars:
+    file: "{{ openbao_effective_site_vars_file }}"
 
 - name: Check for OpenBao vaulted variables
   ansible.builtin.stat:

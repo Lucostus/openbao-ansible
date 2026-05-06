@@ -2,16 +2,14 @@
 # Encrypt the real file with:
 #   ansible-vault encrypt group_vars/rhel10/vault.yml
 
-# Must decode to exactly 32 bytes. Generate with:
-#   openssl rand -base64 32
-openbao_static_unseal_key_b64: "REPLACE_WITH_32_BYTE_BASE64_KEY"
+# Optional legacy static seal input. Bootstrap now defaults to generating one
+# ignored controller artifact per environment. To keep supplying this value from
+# Vault, set openbao_static_seal_source=variable.
+# openbao_static_unseal_key_b64: "REPLACE_WITH_32_BYTE_BASE64_KEY"
 
-# Production best practice is an offline root CA. This project supports the
-# requested vaulted root CA flow so the OpenBao intermediate can be signed by
-# Ansible. Default OpenBao Agent renewal derives per-node listener certificates
-# from that intermediate; no additional vaulted ACME client secret is required.
-# First-run Agent listener certs are expected on each node by default, so
-# private listener keys do not need to be vaulted or copied to the controller.
+# Production best practice is an offline root CA. These values are required
+# only when enabling OpenBao Agent or native listener ACME renewal with the
+# variable-based PKI signing source.
 openbao_root_ca_cert_pem: |
   -----BEGIN CERTIFICATE-----
   REPLACE_WITH_ROOT_CA_CERTIFICATE

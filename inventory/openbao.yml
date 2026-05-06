@@ -1,0 +1,21 @@
+---
+# Replace these example names with the real production and test hostnames.
+# Each ansible_host value is also used as the OpenBao node FQDN.
+
+openbao-prod:
+  hosts:
+    aspsecret1:
+      ansible_host: lagaspsecret1.example.at
+    aspsecret2:
+      ansible_host: lagaspsecret2.example.at
+    aspsecret3:
+      ansible_host: lagaspsecret3.example.at
+
+openbao-test:
+  hosts:
+    astsecret1:
+      ansible_host: astsecret1.example.at
+    astsecret2:
+      ansible_host: astsecret2.example.at
+    astsecret3:
+      ansible_host: lastsecret3.example.at

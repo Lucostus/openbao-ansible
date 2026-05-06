@@ -2,8 +2,11 @@
 
 ## Usually Edited
 
-Edit `group_vars/rhel10/main.yml` for site-specific values:
+Edit `group_vars/<target>/main.yml` for site-specific values. The default
+target is `rhel10`; prod/test runs select `openbao-prod` or `openbao-test` with
+`openbao_target_group`.
 
+- `openbao_target_group`
 - `openbao_version`
 - `openbao_public_fqdn`
 - `openbao_public_api_addr`
@@ -12,10 +15,22 @@ Edit `group_vars/rhel10/main.yml` for site-specific values:
 - `openbao_bootstrap_tls_source`
 - `openbao_node_bootstrap_tls_dir`
 - `openbao_manage_hosts_entries`
+- `openbao_tls_trust_source`
 - `openbao_manage_firewalld`
 - `openbao_manage_selinux`
 
-`openbao_nodes` is the source of each node's OpenBao FQDN and peer IP:
+DNS-only prod/test inventories do not need `openbao_nodes`; each host's
+`ansible_host` becomes `openbao_node_fqdn`:
+
+```yaml
+openbao-prod:
+  hosts:
+    aspsecret1:
+      ansible_host: lagaspsecret1.example.at
+```
+
+Use `openbao_nodes` only when you need to override each node's OpenBao FQDN or
+provide explicit peer IPs for managed `/etc/hosts` entries:
 
 ```yaml
 openbao_nodes:
@@ -26,13 +41,20 @@ openbao_nodes:
 
 ## Secrets
 
-Create `group_vars/rhel10/vault.yml` from the example and encrypt it.
+Bootstrap mode does not require `group_vars/<target>/vault.yml`. Listener
+TLS material is read from the selected hosts, and the static seal key is
+generated once under ignored `secure-artifacts/<target>/static-unseal.key.b64`.
 
-Required:
+Create and encrypt `group_vars/<target>/vault.yml` only when you enable Agent
+or native ACME renewal with variable-based PKI signing.
 
-- `openbao_static_unseal_key_b64`
+Renewal-mode PKI values:
+
 - `openbao_root_ca_cert_pem`
 - `openbao_root_ca_key_pem`
+
+Legacy static seal input is still supported by setting
+`openbao_static_seal_source=variable` and `openbao_static_unseal_key_b64`.
 
 ## Defaults
 
@@ -41,6 +63,7 @@ Most low-level settings are in `group_vars/all/openbao_defaults.yml`, including:
 - package URLs, checksums, and release architecture
 - filesystem paths and service user/group
 - listener and cluster ports
+- target-group selection and environment-scoped artifact paths
 - PKI mount names, role names, and TTLs
 - OpenBao Agent paths and AppRole defaults
 - native ACME fallback settings
@@ -58,8 +81,9 @@ openbao_certificate_mode: native_acme # advanced fallback
 ```
 
 `bootstrap` deploys OpenBao with only the supplied listener certificates. It
-does not create per-node Agent AppRole artifacts, install `openbao-agent`, or
-rotate listener certificates. This is the default fresh production path.
+does not configure OpenBao PKI, create per-node Agent AppRole artifacts, install
+`openbao-agent`, or rotate listener certificates. This is the default fresh
+production path.
 
 `agent` installs OpenBao Agent after the cluster and PKI are ready. The Agent
 uses per-node AppRole credentials to issue listener certificates from OpenBao
@@ -106,9 +130,51 @@ Then rerun:
 ansible-playbook playbooks/site.yml
 ```
 
-The rerun reuses the initialized cluster and existing OpenBao PKI, creates any
-missing per-node Agent AppRole artifacts, installs `openbao-agent`, and replaces
-the bootstrap listener certs with Agent-issued certs.
+Before enabling Agent renewal, provide a PKI signing source such as vaulted
+`openbao_root_ca_cert_pem` and `openbao_root_ca_key_pem`. The rerun reuses the
+initialized cluster, configures OpenBao PKI, creates any missing per-node Agent
+AppRole artifacts, installs `openbao-agent`, and replaces the bootstrap
+listener certs with Agent-issued certs.
+
+## Static Seal
+
+Default prod/test bootstrap uses:
+
+```yaml
+openbao_static_seal_source: generated_artifact
+```
+
+The controller stores one generated key per selected group:
+
+```text
+secure-artifacts/openbao-prod/static-unseal.key.b64
+secure-artifacts/openbao-test/static-unseal.key.b64
+```
+
+If all selected nodes already have the same key at
+`openbao_static_unseal_key_path`, the playbook adopts it into the controller
+artifact. If node keys differ from the artifact, the playbook fails rather than
+overwriting seal material.
+
+## TLS Trust
+
+Default prod/test bootstrap uses the RHEL system trust bundle:
+
+```yaml
+openbao_tls_trust_source: system
+openbao_ca_cert_file: /etc/pki/tls/certs/ca-bundle.crt
+```
+
+For a private CA already present on every node, use:
+
+```yaml
+openbao_tls_trust_source: file
+openbao_tls_trust_file: /path/to/ca.pem
+```
+
+For the legacy vaulted CA flow, keep `openbao_root_ca_cert_pem` in
+`group_vars/<target>/vault.yml`; the default trust source switches to
+`variable` when that value is present.
 
 ## Renamed Variables
 

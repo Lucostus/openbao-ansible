@@ -1,6 +1,15 @@
 ---
+- name: Validate selected OpenBao upgrade target
+  hosts: localhost
+  become: false
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Validate OpenBao target group
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/validate_target_group.yml
+
 - name: Verify OpenBao nodes are reachable before rolling upgrade
-  hosts: rhel10
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: false
   gather_facts: false
   any_errors_fatal: true
@@ -12,7 +21,7 @@
       ansible.builtin.import_tasks: ../roles/openbao_common/tasks/assert_cluster_reachable.yml
 
 - name: Classify OpenBao nodes before rolling upgrade
-  hosts: rhel10
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true
   gather_facts: true
   any_errors_fatal: true
@@ -204,7 +213,7 @@
         - inventory_hostname in (groups.openbao_upgrade_active | default([]))
 
 - name: Upgrade standby nodes needing version change first
-  hosts: rhel10
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true
   gather_facts: true
   any_errors_fatal: true
@@ -219,7 +228,7 @@
       when: inventory_hostname in (groups.openbao_upgrade_standby_needing_change | default([]))
 
 - name: Validate Raft after standby upgrades
-  hosts: rhel10
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true
   gather_facts: false
   any_errors_fatal: true
@@ -258,7 +267,7 @@
           }}.
 
 - name: Upgrade active node needing version change last
-  hosts: rhel10
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true
   gather_facts: true
   any_errors_fatal: true
@@ -273,7 +282,7 @@
       when: inventory_hostname in (groups.openbao_upgrade_active_needing_change | default([]))
 
 - name: Validate Raft after active upgrade
-  hosts: rhel10
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true
   gather_facts: false
   any_errors_fatal: true
@@ -312,7 +321,7 @@
           }}.
 
 - name: Validate upgraded OpenBao cluster
-  hosts: rhel10
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true
   gather_facts: false
   any_errors_fatal: true

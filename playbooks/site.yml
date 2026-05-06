@@ -1,6 +1,15 @@
 ---
+- name: Validate selected OpenBao deployment target
+  hosts: localhost
+  become: false
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Validate OpenBao target group
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/validate_target_group.yml
+
 - name: Verify OpenBao nodes are reachable before deployment
-  hosts: rhel10
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: false
   gather_facts: false
   any_errors_fatal: true
@@ -12,7 +21,7 @@
       ansible.builtin.import_tasks: ../roles/openbao_common/tasks/assert_cluster_reachable.yml
 
 - name: Disable OpenBao Agent when Agent renewal is not selected
-  hosts: rhel10
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true
   gather_facts: false
   any_errors_fatal: true
@@ -27,7 +36,7 @@
       when: not (openbao_agent_enabled | bool)
 
 - name: Prepare OpenBao servers and configure PKI
-  hosts: rhel10
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true
   gather_facts: true
   any_errors_fatal: true
@@ -40,10 +49,14 @@
     - openbao_common
     - openbao_server
     - openbao_bootstrap
-    - openbao_pki
+  tasks:
+    - name: Configure OpenBao PKI when certificate renewal is selected
+      ansible.builtin.include_role:
+        name: openbao_pki
+      when: openbao_pki_enabled | bool
 
 - name: Converge OpenBao Agent listener certificates
-  hosts: rhel10
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true
   gather_facts: false
   any_errors_fatal: true
@@ -58,7 +71,7 @@
       when: openbao_agent_enabled | bool
 
 - name: Converge native listener ACME
-  hosts: rhel10
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true
   gather_facts: false
   any_errors_fatal: true
@@ -75,7 +88,7 @@
       when: openbao_certificate_mode == 'native_acme'
 
 - name: Validate native listener ACME
-  hosts: rhel10
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true
   gather_facts: false
   any_errors_fatal: true
@@ -103,7 +116,7 @@
       when: openbao_certificate_mode == 'native_acme'
 
 - name: Validate OpenBao deployment
-  hosts: rhel10
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true
   gather_facts: false
   any_errors_fatal: true

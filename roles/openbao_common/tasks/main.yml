@@ -17,6 +17,9 @@
 - name: Install pinned OpenBao package
   ansible.builtin.include_tasks: install_package.yml
 
+- name: Resolve static seal material
+  ansible.builtin.include_tasks: static_seal.yml
+
 - name: Install TLS and static seal material
   ansible.builtin.include_tasks: tls_and_seal.yml
 

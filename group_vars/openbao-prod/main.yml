@@ -1,0 +1,20 @@
+---
+# Edit this file for the production OpenBao environment.
+
+openbao_version: "2.5.3"
+
+openbao_public_fqdn: bao-prod.example.at
+openbao_public_api_addr: "https://{{ openbao_public_fqdn }}"
+
+# Bootstrap mode uses listener TLS files already present on each node and does
+# not require Ansible Vault or OpenBao PKI signing inputs.
+openbao_certificate_mode: bootstrap
+openbao_bootstrap_tls_source: node
+openbao_node_bootstrap_tls_dir: /usr/local/lib/cockpitcert
+
+# DNS-only inventories rely on ansible_host/openbao_node_fqdn for peer routing.
+openbao_manage_hosts_entries: false
+openbao_tls_trust_source: system
+
+openbao_manage_firewalld: true
+openbao_manage_selinux: true

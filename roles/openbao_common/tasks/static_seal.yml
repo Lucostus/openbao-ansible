@@ -1,0 +1,181 @@
+---
+- name: Assert static seal source is supported
+  ansible.builtin.assert:
+    that:
+      - openbao_static_seal_source in ['generated_artifact', 'variable']
+    fail_msg: "openbao_static_seal_source must be generated_artifact or variable."
+
+- name: Create secure artifact directory for generated static seal key
+  ansible.builtin.file:
+    path: "{{ openbao_secure_artifacts_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when: openbao_static_seal_source == 'generated_artifact'
+
+- name: Check generated static seal key artifact
+  ansible.builtin.stat:
+    path: "{{ openbao_static_unseal_key_artifact }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_static_seal_artifact_stat
+  run_once: true
+  when: openbao_static_seal_source == 'generated_artifact'
+
+- name: Check existing node static seal key
+  ansible.builtin.stat:
+    path: "{{ openbao_static_unseal_key_path }}"
+  register: openbao_static_seal_node_key_stat
+  when: openbao_static_seal_source == 'generated_artifact'
+
+- name: Read existing node static seal key
+  ansible.builtin.slurp:
+    src: "{{ openbao_static_unseal_key_path }}"
+  register: openbao_static_seal_node_key_content
+  no_log: true
+  when:
+    - openbao_static_seal_source == 'generated_artifact'
+    - openbao_static_seal_node_key_stat.stat.exists | default(false)
+
+- name: Initialize existing static seal key list
+  ansible.builtin.set_fact:
+    openbao_existing_static_seal_keys: []
+  run_once: true
+  no_log: true
+  when: openbao_static_seal_source == 'generated_artifact'
+
+- name: Collect existing static seal keys from nodes
+  ansible.builtin.set_fact:
+    openbao_existing_static_seal_keys: >-
+      {{
+        openbao_existing_static_seal_keys
+        + [hostvars[item].openbao_static_seal_node_key_content.content]
+      }}
+  loop: "{{ groups[openbao_cluster_group] }}"
+  no_log: true
+  run_once: true
+  when:
+    - openbao_static_seal_source == 'generated_artifact'
+    - not (openbao_static_seal_artifact_stat.stat.exists | default(false))
+    - hostvars[item].openbao_static_seal_node_key_stat.stat.exists | default(false)
+
+- name: Assert partial node static seal keys are not adopted
+  ansible.builtin.assert:
+    that:
+      - openbao_existing_static_seal_keys | length == groups[openbao_cluster_group] | length
+    fail_msg: >-
+      Refusing to adopt static seal material because only some OpenBao nodes
+      already have {{ openbao_static_unseal_key_path }}. Restore the missing
+      node keys or provide {{ openbao_static_unseal_key_artifact }}.
+  run_once: true
+  no_log: true
+  when:
+    - openbao_static_seal_source == 'generated_artifact'
+    - not (openbao_static_seal_artifact_stat.stat.exists | default(false))
+    - openbao_existing_static_seal_keys | length > 0
+
+- name: Assert existing node static seal keys match before adoption
+  ansible.builtin.assert:
+    that:
+      - openbao_existing_static_seal_keys | unique | length == 1
+    fail_msg: >-
+      Refusing to adopt static seal material because existing node seal keys
+      differ. Provide the correct {{ openbao_static_unseal_key_artifact }} or
+      reconcile {{ openbao_static_unseal_key_path }} manually.
+  run_once: true
+  no_log: true
+  when:
+    - openbao_static_seal_source == 'generated_artifact'
+    - not (openbao_static_seal_artifact_stat.stat.exists | default(false))
+    - openbao_existing_static_seal_keys | length > 0
+
+- name: Adopt existing node static seal key as controller artifact
+  ansible.builtin.copy:
+    content: "{{ (openbao_existing_static_seal_keys | first | trim) ~ '\n' }}"
+    dest: "{{ openbao_static_unseal_key_artifact }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  no_log: true
+  when:
+    - openbao_static_seal_source == 'generated_artifact'
+    - not (openbao_static_seal_artifact_stat.stat.exists | default(false))
+    - openbao_existing_static_seal_keys | length == groups[openbao_cluster_group] | length
+    - openbao_existing_static_seal_keys | unique | length == 1
+
+- name: Generate static seal key material
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - rand
+      - -base64
+      - "32"
+  delegate_to: localhost
+  become: false
+  register: openbao_generated_static_seal_key
+  changed_when: true
+  run_once: true
+  no_log: true
+  when:
+    - openbao_static_seal_source == 'generated_artifact'
+    - not (openbao_static_seal_artifact_stat.stat.exists | default(false))
+    - openbao_existing_static_seal_keys | length == 0
+
+- name: Store generated static seal key artifact
+  ansible.builtin.copy:
+    content: "{{ (openbao_generated_static_seal_key.stdout | trim) ~ '\n' }}"
+    dest: "{{ openbao_static_unseal_key_artifact }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  no_log: true
+  when:
+    - openbao_static_seal_source == 'generated_artifact'
+    - openbao_generated_static_seal_key is defined
+    - openbao_generated_static_seal_key is changed
+
+- name: Load generated static seal key artifact
+  ansible.builtin.slurp:
+    src: "{{ openbao_static_unseal_key_artifact }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_static_seal_artifact_content
+  no_log: true
+  when: openbao_static_seal_source == 'generated_artifact'
+
+- name: Set generated static seal key fact
+  ansible.builtin.set_fact:
+    openbao_static_unseal_key_b64: "{{ openbao_static_seal_artifact_content.content | b64decode | trim }}"
+  no_log: true
+  when: openbao_static_seal_source == 'generated_artifact'
+
+- name: Assert existing node static seal key matches controller artifact
+  ansible.builtin.assert:
+    that:
+      - openbao_static_seal_node_key_content.content == openbao_static_unseal_key_b64
+    fail_msg: >-
+      Existing {{ openbao_static_unseal_key_path }} on {{ inventory_hostname }}
+      does not match {{ openbao_static_unseal_key_artifact }}. Refusing to
+      overwrite initialized cluster seal material.
+  no_log: true
+  when:
+    - openbao_static_seal_source == 'generated_artifact'
+    - openbao_static_seal_node_key_stat.stat.exists | default(false)
+
+- name: Validate static seal key length
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - |
+        import base64, os, sys
+        raw = base64.b64decode(os.environ["OPENBAO_STATIC_KEY_B64"], validate=True)
+        sys.exit(0 if len(raw) == 32 else 1)
+  environment:
+    OPENBAO_STATIC_KEY_B64: "{{ openbao_static_unseal_key_b64 }}"
+  changed_when: false
+  no_log: true

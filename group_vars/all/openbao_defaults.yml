@@ -1,6 +1,7 @@
 ---
-openbao_cluster_group: rhel10
-openbao_cluster_name: openbao-rhel10
+openbao_target_group: rhel10
+openbao_cluster_group: "{{ openbao_target_group }}"
+openbao_cluster_name: "{{ 'openbao-' ~ (openbao_cluster_group | regex_replace('^openbao-', '')) }}"
 
 openbao_version: "2.5.3"
 openbao_release_arch: amd64
@@ -31,15 +32,12 @@ openbao_node_fqdn: >-
   {{
     (openbao_nodes | default({})).get(inventory_hostname, {}).get(
       'fqdn',
-      inventory_hostname ~ '.example.com'
+      ansible_host | default(inventory_hostname)
     )
   }}
 openbao_node_ip: >-
   {{
-    (openbao_nodes | default({})).get(inventory_hostname, {}).get(
-      'ip',
-      (ansible_facts | default({})).get('default_ipv4', {}).get('address', ansible_host)
-    )
+    (openbao_nodes | default({})).get(inventory_hostname, {}).get('ip', '')
   }}
 openbao_listener_address: "0.0.0.0"
 openbao_cluster_bind_address: "0.0.0.0"
@@ -77,7 +75,18 @@ openbao_node_bootstrap_tls_key_candidates:
   - "{{ openbao_node_bootstrap_tls_dir }}/{{ inventory_hostname }}.key"
 openbao_tls_cert_file: "{{ openbao_tls_dir }}/openbao.fullchain.pem"
 openbao_tls_key_file: "{{ openbao_tls_dir }}/openbao.key.pem"
-openbao_ca_cert_file: "{{ openbao_tls_dir }}/root-ca.pem"
+openbao_tls_trust_source: "{{ 'variable' if openbao_root_ca_cert_pem is defined else 'system' }}"
+openbao_system_ca_cert_file: /etc/pki/tls/certs/ca-bundle.crt
+openbao_managed_ca_cert_file: "{{ openbao_tls_dir }}/root-ca.pem"
+openbao_tls_trust_file: ""
+openbao_ca_cert_file: >-
+  {{
+    openbao_system_ca_cert_file
+    if openbao_tls_trust_source == 'system'
+    else openbao_tls_trust_file
+    if openbao_tls_trust_source == 'file' and openbao_tls_trust_file | length > 0
+    else openbao_managed_ca_cert_file
+  }}
 openbao_tls_server_name: "{{ openbao_public_fqdn }}"
 openbao_tls_min_version: tls12
 openbao_tls_disable_client_certs: true
@@ -147,16 +156,26 @@ openbao_ui: true
 openbao_log_level: info
 openbao_recovery_shares: 5
 openbao_recovery_threshold: 3
-openbao_manage_hosts_entries: true
+openbao_manage_hosts_entries: false
 openbao_manage_firewalld: true
 openbao_manage_selinux: true
 openbao_enable_unauthenticated_metrics: false
 
 openbao_validate_bootstrap_inputs: true
 openbao_operator_token: ""
-openbao_secure_artifacts_dir: "{{ playbook_dir }}/../secure-artifacts"
+openbao_static_seal_source: "{{ 'variable' if openbao_static_unseal_key_b64 is defined else 'generated_artifact' }}"
+openbao_secure_artifacts_base_dir: "{{ playbook_dir }}/../secure-artifacts"
+openbao_secure_artifacts_dir: >-
+  {{
+    openbao_secure_artifacts_base_dir
+    if openbao_cluster_group == 'rhel10'
+    else openbao_secure_artifacts_base_dir ~ '/' ~ openbao_cluster_group
+  }}
 openbao_init_artifact: "{{ openbao_secure_artifacts_dir }}/{{ openbao_cluster_name }}-init.json"
+openbao_static_unseal_key_artifact: "{{ openbao_secure_artifacts_dir }}/static-unseal.key.b64"
 
+openbao_pki_enabled: "{{ openbao_certificate_mode in ['agent', 'native_acme'] }}"
+openbao_pki_signing_source: variable
 openbao_pki_mount: pki_openbao
 openbao_pki_intermediate_common_name: OpenBao Listener Intermediate CA
 openbao_pki_issuer_name: openbao-listener-intermediate

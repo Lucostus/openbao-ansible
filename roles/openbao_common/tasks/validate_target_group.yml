@@ -1,0 +1,24 @@
+---
+- name: Set selected OpenBao inventory group
+  ansible.builtin.set_fact:
+    openbao_selected_target_group: "{{ openbao_target_group | default('rhel10') }}"
+
+- name: Assert selected OpenBao inventory group exists
+  ansible.builtin.assert:
+    that:
+      - openbao_selected_target_group in groups
+      - groups[openbao_selected_target_group] | length == 3
+    fail_msg: >-
+      openbao_target_group={{ openbao_selected_target_group }} must name an
+      inventory group containing exactly three OpenBao hosts.
+
+- name: Assert every selected OpenBao host has ansible_host
+  ansible.builtin.assert:
+    that:
+      - hostvars[item].ansible_host is defined
+      - hostvars[item].ansible_host | string | length > 0
+    fail_msg: >-
+      Host {{ item }} in {{ openbao_selected_target_group }} must define
+      ansible_host. DNS-only OpenBao inventories use ansible_host as the node
+      FQDN.
+  loop: "{{ groups[openbao_selected_target_group] }}"

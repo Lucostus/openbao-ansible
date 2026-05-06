@@ -48,7 +48,7 @@
   become: false
   no_log: true
 
-- name: Sign intermediate CSR with vaulted root CA
+- name: Sign intermediate CSR with variable root CA
   ansible.builtin.command:
     argv:
       - openssl

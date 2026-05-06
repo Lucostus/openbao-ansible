@@ -9,10 +9,16 @@ Enable it explicitly:
 
 ```yaml
 openbao_certificate_mode: native_acme
+openbao_pki_enabled: true
 openbao_native_acme_challenge: tls-alpn-01
 openbao_native_acme_cache_nfs_src: nfs-server.example.com:/exports/openbao-acme
 openbao_native_acme_tls_alpn_routed: true
 ```
+
+Native ACME requires a PKI signing source. Bootstrap mode intentionally skips
+PKI setup, so add `openbao_root_ca_cert_pem` and `openbao_root_ca_key_pem` in
+the selected environment vault, or provide another supported signing source
+before switching to `native_acme`.
 
 Supported challenges:
 
@@ -41,4 +47,5 @@ The PKI configuration keeps:
   `pki_openbao/roles/openbao-listener/acme/new-eab`
 - response headers `Replay-Nonce`, `Link`, `Location`, and `Last-Modified`
 
-Generated EAB artifacts are stored under `secure-artifacts/` on the controller.
+Generated EAB artifacts are stored under the selected environment's
+`secure-artifacts/` directory on the controller.
