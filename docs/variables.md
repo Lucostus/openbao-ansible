@@ -14,6 +14,7 @@ target is `rhel10`; prod/test runs select `openbao-prod` or `openbao-test` with
 - `openbao_certificate_mode`
 - `openbao_bootstrap_tls_source`
 - `openbao_node_bootstrap_tls_dir`
+- `openbao_bootstrap_tls_missing_strategy`
 - `openbao_manage_hosts_entries`
 - `openbao_tls_trust_source`
 - `openbao_manage_firewalld`
@@ -75,13 +76,16 @@ environment requires it.
 ## Certificate Modes
 
 ```yaml
-openbao_certificate_mode: bootstrap   # default, provided listener TLS only
+openbao_certificate_mode: bootstrap   # default, provided or generated bootstrap TLS
 openbao_certificate_mode: agent       # later Agent-managed renewal
 openbao_certificate_mode: native_acme # advanced fallback
 ```
 
-`bootstrap` deploys OpenBao with only the supplied listener certificates. It
-does not configure OpenBao PKI, create per-node Agent AppRole artifacts, install
+`bootstrap` deploys OpenBao with only bootstrap listener certificates. It uses
+real per-node cert/key files when present, or generates temporary self-signed
+bootstrap material when those files are absent and
+`openbao_bootstrap_tls_missing_strategy=generate_self_signed`. It does not
+configure OpenBao PKI, create per-node Agent AppRole artifacts, install
 `openbao-agent`, or rotate listener certificates. This is the default fresh
 production path.
 
@@ -99,10 +103,50 @@ openbao_bootstrap_tls_source: node       # default for agent and bootstrap modes
 openbao_bootstrap_tls_source: controller # lab or fallback
 ```
 
-`node` reads first-run cert/key material from each managed node. By default the
-role auto-detects files under `openbao_node_bootstrap_tls_dir`; explicit paths
-can be set with `openbao_node_bootstrap_tls_cert` and
-`openbao_node_bootstrap_tls_key`.
+`node` reads first-run cert/key material from each managed node. The default
+layout expects one certificate and key pair per host under
+`openbao_node_bootstrap_tls_dir`, with inventory-host names preferred:
+
+```yaml
+openbao_node_bootstrap_tls_dir: /usr/local/lib/cockpitcert
+# /usr/local/lib/cockpitcert/{{ inventory_hostname }}.fullchain.pem
+# /usr/local/lib/cockpitcert/{{ inventory_hostname }}.key.pem
+```
+
+The role also auto-detects files named after `openbao_node_fqdn`,
+`ansible_hostname`, or `ansible_fqdn`, then falls back to legacy generic names
+such as `fullchain.pem`, `cert.pem`, `key.pem`, and `privkey.pem`.
+
+For unusual per-host names, set explicit templated paths:
+
+```yaml
+openbao_node_bootstrap_tls_cert: "{{ openbao_node_bootstrap_tls_dir }}/{{ inventory_hostname }}-server.fullchain.pem"
+openbao_node_bootstrap_tls_key: "{{ openbao_node_bootstrap_tls_dir }}/{{ inventory_hostname }}-server.key.pem"
+```
+
+When no real node cert/key files exist yet, the default missing-file strategy
+generates a temporary bootstrap CA and per-node leaf certificates on the
+controller:
+
+```yaml
+openbao_bootstrap_tls_missing_strategy: generate_self_signed
+openbao_bootstrap_selfsigned_artifacts_dir: "{{ openbao_secure_artifacts_dir }}/bootstrap-selfsigned"
+```
+
+The generated CA is installed on each node as the effective `openbao_ca_cert_file`
+so CLI checks, Raft retry-join, and listener validation continue to verify TLS.
+Generated material is not production certificate material and stays under ignored
+`secure-artifacts/`.
+
+If real certs should be mandatory, set:
+
+```yaml
+openbao_bootstrap_tls_missing_strategy: fail
+```
+
+A partial real pair always fails. This prevents drifting into generated
+certificates when a certificate was copied without its matching key, or the key
+was copied without its matching certificate.
 
 `controller` reads cert/key material from the Ansible controller using
 `openbao_controller_bootstrap_tls_cert` and
@@ -116,7 +160,13 @@ Start with the default bootstrap-only mode:
 openbao_certificate_mode: bootstrap
 openbao_bootstrap_tls_source: node
 openbao_node_bootstrap_tls_dir: /usr/local/lib/cockpitcert
+openbao_bootstrap_tls_missing_strategy: generate_self_signed
 ```
+
+If real certs are not present yet, this first run uses generated temporary
+bootstrap certificates. Place the real files later at the configured per-node
+paths and rerun `playbooks/site.yml`; the playbook replaces the generated
+listener cert/key pair and returns to the configured trust source.
 
 Later enable Agent renewal by changing only:
 

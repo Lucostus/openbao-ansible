@@ -9,18 +9,22 @@ retained as an advanced fallback and documented separately.
 
 ## Bootstrap First, Agent Later
 
-The default deployment starts without OpenBao Agent and keeps using the
-supplied listener certificates:
+The default deployment starts without OpenBao Agent and uses per-node listener
+certificates when they exist. If no real listener cert/key pair is present yet,
+Ansible generates a temporary bootstrap CA and per-node listener certificates
+under ignored `secure-artifacts/` so the cluster can start with TLS verification
+still enabled:
 
 ```yaml
 openbao_certificate_mode: bootstrap
 openbao_bootstrap_tls_source: node
 openbao_node_bootstrap_tls_dir: /usr/local/lib/cockpitcert
+openbao_bootstrap_tls_missing_strategy: generate_self_signed
 ```
 
-This deploys OpenBao HA and leaves the listener on the bootstrap cert/key pair
-without requiring Ansible Vault, configuring OpenBao PKI, or installing
-`openbao-agent`.
+This deploys OpenBao HA and leaves the listener on the selected bootstrap
+cert/key pair without requiring Ansible Vault, configuring OpenBao PKI, or
+installing `openbao-agent`.
 
 Later, enable Agent renewal by changing only:
 
@@ -89,9 +93,21 @@ Vaulted PKI values for renewal modes:
 - `openbao_root_ca_key_pem`: root CA key for signing the OpenBao intermediate.
 
 By default, first-run listener cert/key material is expected on each node under
-`/usr/local/lib/cockpitcert` for both `agent` and `bootstrap` modes. Ansible
-copies it locally on the node into `/etc/openbao.d/tls`; private keys are not
-copied back to the controller.
+`/usr/local/lib/cockpitcert` for both `agent` and `bootstrap` modes. Use one
+pair per host, preferably named after the inventory host:
+`<inventory_hostname>.fullchain.pem` and `<inventory_hostname>.key.pem`.
+FQDN-based names are also auto-detected. Ansible copies the selected files
+locally on the node into `/etc/openbao.d/tls`; private keys are not copied back
+to the controller.
+
+If a node has neither real file and
+`openbao_bootstrap_tls_missing_strategy=generate_self_signed`, Ansible generates
+a shared temporary bootstrap CA plus one leaf certificate per node under
+`secure-artifacts/<group>/bootstrap-selfsigned/`. These generated certs are only
+for first deployment. After the real cert/key files are placed at the per-node
+paths, rerun `playbooks/site.yml`; the playbook replaces the generated listener
+certs and validates against the configured trust source again. A partial real
+pair, such as a cert without its key, fails instead of falling back.
 
 ## Deploy
 

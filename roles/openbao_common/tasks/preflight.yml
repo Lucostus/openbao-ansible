@@ -11,6 +11,7 @@
     that:
       - openbao_certificate_mode in ['agent', 'native_acme', 'bootstrap']
       - openbao_bootstrap_tls_source in ['controller', 'node']
+      - openbao_bootstrap_tls_missing_strategy in ['fail', 'generate_self_signed']
       - openbao_bootstrap_tls_source != 'node' or openbao_certificate_mode in ['agent', 'bootstrap']
       - openbao_static_seal_source in ['generated_artifact', 'variable']
       - openbao_tls_trust_source in ['system', 'variable', 'file']

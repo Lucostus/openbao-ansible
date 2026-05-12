@@ -12,6 +12,196 @@
 - name: Resolve bootstrap TLS source inputs
   ansible.builtin.include_tasks: resolve_bootstrap_tls.yml
 
+- name: Set generated bootstrap certificate SANs
+  ansible.builtin.set_fact:
+    openbao_bootstrap_selfsigned_dns_subject_alt_names: >-
+      {{
+        [
+          'DNS:' ~ openbao_public_fqdn,
+          'DNS:' ~ openbao_node_fqdn,
+          'DNS:' ~ inventory_hostname,
+          ('DNS:' ~ ansible_hostname) if (ansible_hostname | default('') | length > 0) else '',
+          ('DNS:' ~ ansible_fqdn) if (ansible_fqdn | default('') | length > 0) else ''
+        ]
+        | reject('equalto', '')
+        | unique
+        | list
+      }}
+    openbao_bootstrap_selfsigned_ip_subject_alt_names: >-
+      {{
+        [
+          ('IP:' ~ openbao_node_ip) if (openbao_node_ip | default('') is match('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')) else '',
+          ('IP:' ~ ansible_host) if (ansible_host | default('') is match('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')) else ''
+        ]
+        | reject('equalto', '')
+        | unique
+        | list
+      }}
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_using_selfsigned | bool
+
+- name: Create generated bootstrap TLS artifact directory
+  ansible.builtin.file:
+    path: "{{ openbao_bootstrap_selfsigned_artifacts_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_using_selfsigned | bool
+
+- name: Generate bootstrap self-signed CA private key
+  community.crypto.openssl_privatekey:
+    path: "{{ openbao_bootstrap_selfsigned_ca_key }}"
+    type: RSA
+    size: 4096
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  no_log: true
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_using_selfsigned | bool
+
+- name: Generate bootstrap self-signed CA CSR
+  community.crypto.openssl_csr:
+    path: "{{ openbao_bootstrap_selfsigned_artifacts_dir }}/bootstrap-ca.csr"
+    privatekey_path: "{{ openbao_bootstrap_selfsigned_ca_key }}"
+    common_name: OpenBao temporary bootstrap CA
+    basic_constraints:
+      - "CA:TRUE"
+    basic_constraints_critical: true
+    key_usage:
+      - keyCertSign
+      - cRLSign
+    key_usage_critical: true
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_using_selfsigned | bool
+
+- name: Generate bootstrap self-signed CA certificate
+  community.crypto.x509_certificate:
+    path: "{{ openbao_bootstrap_selfsigned_ca_cert }}"
+    privatekey_path: "{{ openbao_bootstrap_selfsigned_ca_key }}"
+    csr_path: "{{ openbao_bootstrap_selfsigned_artifacts_dir }}/bootstrap-ca.csr"
+    provider: selfsigned
+    selfsigned_not_after: "+{{ openbao_bootstrap_selfsigned_ca_days }}d"
+    ignore_timestamps: true
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_using_selfsigned | bool
+
+- name: Generate bootstrap listener private key
+  community.crypto.openssl_privatekey:
+    path: "{{ openbao_bootstrap_selfsigned_leaf_key }}"
+    type: RSA
+    size: 2048
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  no_log: true
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_using_selfsigned | bool
+
+- name: Generate bootstrap listener CSR
+  community.crypto.openssl_csr:
+    path: "{{ openbao_bootstrap_selfsigned_artifacts_dir }}/{{ inventory_hostname }}.csr"
+    privatekey_path: "{{ openbao_bootstrap_selfsigned_leaf_key }}"
+    common_name: "{{ openbao_node_fqdn }}"
+    basic_constraints:
+      - "CA:FALSE"
+    key_usage:
+      - digitalSignature
+      - keyEncipherment
+    extended_key_usage:
+      - serverAuth
+    subject_alt_name: "{{ openbao_bootstrap_selfsigned_dns_subject_alt_names + openbao_bootstrap_selfsigned_ip_subject_alt_names }}"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_using_selfsigned | bool
+
+- name: Generate bootstrap listener certificate
+  community.crypto.x509_certificate:
+    path: "{{ openbao_bootstrap_selfsigned_artifacts_dir }}/{{ inventory_hostname }}.leaf.pem"
+    privatekey_path: "{{ openbao_bootstrap_selfsigned_leaf_key }}"
+    csr_path: "{{ openbao_bootstrap_selfsigned_artifacts_dir }}/{{ inventory_hostname }}.csr"
+    provider: ownca
+    ownca_path: "{{ openbao_bootstrap_selfsigned_ca_cert }}"
+    ownca_privatekey_path: "{{ openbao_bootstrap_selfsigned_ca_key }}"
+    ownca_not_after: "+{{ openbao_bootstrap_selfsigned_leaf_days }}d"
+    ignore_timestamps: true
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_using_selfsigned | bool
+
+- name: Build bootstrap listener fullchain
+  ansible.builtin.copy:
+    content: |
+      {{ lookup('ansible.builtin.file', openbao_bootstrap_selfsigned_artifacts_dir ~ '/' ~ inventory_hostname ~ '.leaf.pem') | trim }}
+      {{ lookup('ansible.builtin.file', openbao_bootstrap_selfsigned_ca_cert) | trim }}
+    dest: "{{ openbao_bootstrap_selfsigned_leaf_cert }}"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_using_selfsigned | bool
+
+- name: Install generated bootstrap CA certificate
+  ansible.builtin.copy:
+    src: "{{ openbao_bootstrap_selfsigned_ca_cert }}"
+    dest: "{{ openbao_managed_ca_cert_file }}"
+    owner: root
+    group: "{{ openbao_service_group }}"
+    mode: "0644"
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_using_selfsigned | bool
+
+- name: Install generated bootstrap OpenBao listener certificate
+  ansible.builtin.copy:
+    src: "{{ openbao_bootstrap_tls_effective_cert }}"
+    dest: "{{ openbao_tls_cert_file }}"
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0640"
+  notify: Restart OpenBao
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_effective_source | default('') == 'generated_selfsigned'
+
+- name: Install generated bootstrap OpenBao listener private key
+  ansible.builtin.copy:
+    src: "{{ openbao_bootstrap_tls_effective_key }}"
+    dest: "{{ openbao_tls_key_file }}"
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0600"
+  notify: Restart OpenBao
+  no_log: true
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_effective_source | default('') == 'generated_selfsigned'
+
 - name: Install controller bootstrap OpenBao listener certificate
   ansible.builtin.copy:
     src: "{{ openbao_bootstrap_tls_effective_cert }}"
@@ -19,6 +209,7 @@
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
     mode: "0640"
+  notify: Restart OpenBao
   when:
     - openbao_bootstrap_tls_install_needed | bool
     - openbao_bootstrap_tls_effective_source | default('') == 'controller'
@@ -30,6 +221,7 @@
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
     mode: "0600"
+  notify: Restart OpenBao
   no_log: true
   when:
     - openbao_bootstrap_tls_install_needed | bool
@@ -43,6 +235,7 @@
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
     mode: "0640"
+  notify: Restart OpenBao
   when:
     - openbao_bootstrap_tls_install_needed | bool
     - openbao_bootstrap_tls_effective_source | default('') == 'node'
@@ -59,17 +252,14 @@
 
 - name: Install node bootstrap OpenBao listener certificate with controller-side chain
   ansible.builtin.copy:
-    content: >-
-      {{
-        (openbao_remote_bootstrap_cert_content.content | b64decode | trim)
-        ~ '\n'
-        ~ (lookup('ansible.builtin.file', openbao_node_bootstrap_tls_chain) | trim)
-        ~ '\n'
-      }}
+    content: |
+      {{ openbao_remote_bootstrap_cert_content.content | b64decode | trim }}
+      {{ lookup('ansible.builtin.file', openbao_node_bootstrap_tls_chain) | trim }}
     dest: "{{ openbao_tls_cert_file }}"
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
     mode: "0640"
+  notify: Restart OpenBao
   when:
     - openbao_bootstrap_tls_install_needed | bool
     - openbao_bootstrap_tls_effective_source | default('') == 'node'
@@ -83,6 +273,7 @@
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
     mode: "0600"
+  notify: Restart OpenBao
   no_log: true
   when:
     - openbao_bootstrap_tls_install_needed | bool

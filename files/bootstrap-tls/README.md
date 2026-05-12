@@ -7,13 +7,20 @@ with:
 openbao_bootstrap_tls_source: controller
 ```
 
-Default production `agent` deployments instead read bootstrap cert/key
-material from each managed node under `/usr/local/lib/cockpitcert/`, copy it
-once into `/etc/openbao.d/tls`, and then let `openbao-agent` own renewal. This
-directory remains the default source for the local lab and for controller-file
-fallback deployments.
+Default production `bootstrap` and `agent` deployments instead read one
+bootstrap cert/key pair per host from each managed node under
+`/usr/local/lib/cockpitcert/`, copy it once into `/etc/openbao.d/tls`, and then
+optionally let `openbao-agent` own renewal. This directory remains the default
+source for the local lab and for controller-file fallback deployments.
 
-Expected default names:
+If no node-side real cert/key pair exists yet and
+`openbao_bootstrap_tls_missing_strategy=generate_self_signed`, Ansible generates
+a temporary bootstrap CA plus per-node listener certificates under ignored
+`secure-artifacts/<group>/bootstrap-selfsigned/`. Put the real per-node files in
+place later and rerun `playbooks/site.yml` to replace the generated listener
+certificates.
+
+Controller bootstrap uses one pair per inventory host. Expected default names:
 
 - `rhel10-ansible-1.fullchain.pem`
 - `rhel10-ansible-1.key.pem`
