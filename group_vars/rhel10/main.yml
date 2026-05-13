@@ -25,6 +25,10 @@ openbao_nodes:
 # openbao_node_bootstrap_tls_cert and openbao_node_bootstrap_tls_key. When no
 # real pair exists yet, Ansible generates temporary bootstrap certs under
 # ignored secure-artifacts/ and replaces them after the real files appear.
+# If a subordinate CA exists on one or all OpenBao nodes, operators can set
+# openbao_bootstrap_tls_missing_strategy=issue_from_node_subca and
+# openbao_pki_signing_source=node_subca to bootstrap and renew from that sub-CA
+# without copying its private key off the managed node.
 openbao_certificate_mode: bootstrap
 openbao_bootstrap_tls_source: node
 openbao_node_bootstrap_tls_dir: /usr/local/lib/cockpitcert

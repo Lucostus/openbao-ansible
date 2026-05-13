@@ -1,0 +1,291 @@
+---
+- name: Set node sub-CA bootstrap renewal threshold
+  ansible.builtin.set_fact:
+    openbao_node_subca_bootstrap_renew_before_seconds: >-
+      {{
+        ((openbao_node_subca_bootstrap_renew_before | string | regex_replace('d$', '') | int) * 86400)
+        if (openbao_node_subca_bootstrap_renew_before | string is match('^[0-9]+d$'))
+        else (openbao_node_subca_bootstrap_renew_before | int)
+      }}
+
+- name: Assert node sub-CA bootstrap signer was resolved
+  ansible.builtin.assert:
+    that:
+      - openbao_node_subca_bootstrap_signer_host | default('') in groups[openbao_cluster_group]
+      - openbao_node_subca_bootstrap_signer_host in openbao_node_subca_available_hosts
+      - "'BEGIN CERTIFICATE' in (openbao_node_subca_cluster_trust_bundle | default(''))"
+    fail_msg: "Node sub-CA bootstrap signing was selected, but no valid signer host was resolved."
+
+- name: Check existing node sub-CA bootstrap fullchain
+  ansible.builtin.stat:
+    path: "{{ openbao_node_subca_bootstrap_fullchain_file }}"
+  register: openbao_node_subca_bootstrap_fullchain_stat
+
+- name: Check existing node sub-CA bootstrap private key
+  ansible.builtin.stat:
+    path: "{{ openbao_node_subca_bootstrap_key_file }}"
+  register: openbao_node_subca_bootstrap_key_stat
+  no_log: true
+
+- name: Fail when existing node sub-CA bootstrap cert and key mismatch
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cert_hash="$(
+      openssl x509 -in "${OPENBAO_CERT_FILE}" -pubkey -noout \
+        | openssl pkey -pubin -outform DER \
+        | openssl dgst -sha256 -binary \
+        | openssl base64 -A
+    )"
+    key_hash="$(
+      openssl pkey -in "${OPENBAO_KEY_FILE}" -pubout -outform DER \
+        | openssl dgst -sha256 -binary \
+        | openssl base64 -A
+    )"
+    test "${cert_hash}" = "${key_hash}"
+  args:
+    executable: /bin/bash
+  environment:
+    OPENBAO_CERT_FILE: "{{ openbao_node_subca_bootstrap_fullchain_file }}"
+    OPENBAO_KEY_FILE: "{{ openbao_node_subca_bootstrap_key_file }}"
+  register: openbao_node_subca_bootstrap_existing_key_match
+  changed_when: false
+  failed_when: openbao_node_subca_bootstrap_existing_key_match.rc != 0
+  no_log: true
+  when:
+    - openbao_node_subca_bootstrap_fullchain_stat.stat.exists | default(false)
+    - openbao_node_subca_bootstrap_key_stat.stat.exists | default(false)
+
+- name: Ensure node sub-CA bootstrap artifact directory exists
+  ansible.builtin.file:
+    path: "{{ openbao_node_subca_bootstrap_artifact_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Generate node sub-CA bootstrap listener private key
+  community.crypto.openssl_privatekey:
+    path: "{{ openbao_node_subca_bootstrap_key_file }}"
+    type: "{{ openbao_node_subca_bootstrap_key_type }}"
+    size: "{{ openbao_node_subca_bootstrap_key_size }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Generate node sub-CA bootstrap listener CSR
+  community.crypto.openssl_csr:
+    path: "{{ openbao_node_subca_bootstrap_csr_file }}"
+    privatekey_path: "{{ openbao_node_subca_bootstrap_key_file }}"
+    common_name: "{{ openbao_node_fqdn }}"
+    basic_constraints:
+      - "CA:FALSE"
+    key_usage:
+      - digitalSignature
+      - keyEncipherment
+    extended_key_usage:
+      - serverAuth
+    subject_alt_name: "{{ openbao_bootstrap_selfsigned_dns_subject_alt_names + openbao_bootstrap_selfsigned_ip_subject_alt_names }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: openbao_node_subca_bootstrap_csr_result
+
+- name: Validate existing node sub-CA bootstrap certificate
+  ansible.builtin.shell: |
+    set -euo pipefail
+    test -s "${OPENBAO_CERT_FILE}"
+    test -s "${OPENBAO_KEY_FILE}"
+    tmpdir="$(mktemp -d)"
+    trap 'rm -rf "${tmpdir}"' EXIT
+    leaf="${tmpdir}/leaf.pem"
+    chain="${tmpdir}/chain.pem"
+    awk -v leaf="${leaf}" -v chain="${chain}" '
+      /-----BEGIN CERTIFICATE-----/ { cert_index++ }
+      cert_index == 1 { print > leaf }
+      cert_index > 1 { print > chain }
+    ' "${OPENBAO_CERT_FILE}"
+    test -s "${leaf}"
+    if test -s "${chain}"; then
+      openssl verify -CAfile "${OPENBAO_CA_CERT_FILE}" -untrusted "${chain}" "${leaf}"
+    else
+      openssl verify -CAfile "${OPENBAO_CA_CERT_FILE}" "${leaf}"
+    fi
+    cert_hash="$(
+      openssl x509 -in "${leaf}" -pubkey -noout \
+        | openssl pkey -pubin -outform DER \
+        | openssl dgst -sha256 -binary \
+        | openssl base64 -A
+    )"
+    key_hash="$(
+      openssl pkey -in "${OPENBAO_KEY_FILE}" -pubout -outform DER \
+        | openssl dgst -sha256 -binary \
+        | openssl base64 -A
+    )"
+    test "${cert_hash}" = "${key_hash}"
+    openssl x509 -in "${leaf}" -checkend "${OPENBAO_RENEW_BEFORE_SECONDS}" -noout
+    while IFS= read -r name; do
+      test -z "${name}" || openssl x509 -in "${leaf}" -checkhost "${name}" -noout
+    done <<< "${OPENBAO_EXPECTED_DNS_NAMES}"
+    while IFS= read -r ip; do
+      test -z "${ip}" || openssl x509 -in "${leaf}" -checkip "${ip}" -noout
+    done <<< "${OPENBAO_EXPECTED_IP_SANS}"
+  args:
+    executable: /bin/bash
+  environment:
+    OPENBAO_CERT_FILE: "{{ openbao_node_subca_bootstrap_fullchain_file }}"
+    OPENBAO_KEY_FILE: "{{ openbao_node_subca_bootstrap_key_file }}"
+    OPENBAO_CA_CERT_FILE: "{{ openbao_ca_cert_file }}"
+    OPENBAO_RENEW_BEFORE_SECONDS: "{{ openbao_node_subca_bootstrap_renew_before_seconds | string }}"
+    OPENBAO_EXPECTED_DNS_NAMES: >-
+      {{
+        openbao_bootstrap_selfsigned_dns_subject_alt_names
+        | map('regex_replace', '^DNS:', '')
+        | join('\n')
+      }}
+    OPENBAO_EXPECTED_IP_SANS: >-
+      {{
+        openbao_bootstrap_selfsigned_ip_subject_alt_names
+        | map('regex_replace', '^IP:', '')
+        | join('\n')
+      }}
+  register: openbao_node_subca_bootstrap_current_check
+  changed_when: false
+  failed_when: false
+
+- name: Set node sub-CA bootstrap issue requirement
+  ansible.builtin.set_fact:
+    openbao_node_subca_bootstrap_issue_needed: >-
+      {{
+        openbao_node_subca_bootstrap_current_check.rc != 0
+        or openbao_node_subca_bootstrap_csr_result is changed
+      }}
+
+- name: Issue local node sub-CA bootstrap listener certificate
+  community.crypto.x509_certificate:
+    path: "{{ openbao_node_subca_bootstrap_leaf_file }}"
+    csr_path: "{{ openbao_node_subca_bootstrap_csr_file }}"
+    provider: ownca
+    ownca_path: "{{ hostvars[openbao_node_subca_bootstrap_signer_host].openbao_node_subca_cert_file }}"
+    ownca_privatekey_path: "{{ hostvars[openbao_node_subca_bootstrap_signer_host].openbao_node_subca_key_file }}"
+    ownca_not_after: "+{{ openbao_node_subca_bootstrap_leaf_days }}d"
+    ignore_timestamps: true
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - openbao_node_subca_bootstrap_issue_needed | bool
+    - openbao_node_subca_bootstrap_signer_host == inventory_hostname
+
+- name: Read node sub-CA bootstrap CSR for delegated signing
+  ansible.builtin.slurp:
+    src: "{{ openbao_node_subca_bootstrap_csr_file }}"
+  register: openbao_node_subca_bootstrap_csr_content
+  when:
+    - openbao_node_subca_bootstrap_issue_needed | bool
+    - openbao_node_subca_bootstrap_signer_host != inventory_hostname
+
+- name: Sign node sub-CA bootstrap CSR on delegated signer
+  when:
+    - openbao_node_subca_bootstrap_issue_needed | bool
+    - openbao_node_subca_bootstrap_signer_host != inventory_hostname
+  block:
+    - name: Create delegated node sub-CA signing workspace
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: openbao-node-subca
+      delegate_to: "{{ openbao_node_subca_bootstrap_signer_host }}"
+      register: openbao_node_subca_delegated_signing_tempdir
+
+    - name: Copy delegated node sub-CA signing inputs
+      ansible.builtin.copy:
+        content: "{{ item.content }}"
+        dest: "{{ openbao_node_subca_delegated_signing_tempdir.path }}/{{ item.name }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - name: listener.csr
+          content: "{{ openbao_node_subca_bootstrap_csr_content.content | b64decode }}"
+          mode: "0644"
+        - name: v3_listener.ext
+          content: |
+            [v3_listener]
+            basicConstraints = CA:FALSE
+            keyUsage = digitalSignature, keyEncipherment
+            extendedKeyUsage = serverAuth
+            subjectAltName = {{ (openbao_bootstrap_selfsigned_dns_subject_alt_names + openbao_bootstrap_selfsigned_ip_subject_alt_names) | join(', ') }}
+          mode: "0644"
+      delegate_to: "{{ openbao_node_subca_bootstrap_signer_host }}"
+
+    - name: Sign delegated node sub-CA bootstrap listener certificate
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - x509
+          - -req
+          - -in
+          - "{{ openbao_node_subca_delegated_signing_tempdir.path }}/listener.csr"
+          - -CA
+          - "{{ hostvars[openbao_node_subca_bootstrap_signer_host].openbao_node_subca_cert_file }}"
+          - -CAkey
+          - "{{ hostvars[openbao_node_subca_bootstrap_signer_host].openbao_node_subca_key_file }}"
+          - -CAcreateserial
+          - -out
+          - "{{ openbao_node_subca_delegated_signing_tempdir.path }}/listener.leaf.pem"
+          - -days
+          - "{{ openbao_node_subca_bootstrap_leaf_days | string }}"
+          - -sha256
+          - -extfile
+          - "{{ openbao_node_subca_delegated_signing_tempdir.path }}/v3_listener.ext"
+          - -extensions
+          - v3_listener
+      delegate_to: "{{ openbao_node_subca_bootstrap_signer_host }}"
+      register: openbao_node_subca_delegated_sign
+      changed_when: true
+      failed_when: openbao_node_subca_delegated_sign.rc != 0
+
+    - name: Read delegated node sub-CA bootstrap listener certificate
+      ansible.builtin.slurp:
+        src: "{{ openbao_node_subca_delegated_signing_tempdir.path }}/listener.leaf.pem"
+      delegate_to: "{{ openbao_node_subca_bootstrap_signer_host }}"
+      register: openbao_node_subca_delegated_leaf_content
+
+    - name: Install delegated node sub-CA bootstrap listener leaf
+      ansible.builtin.copy:
+        content: "{{ openbao_node_subca_delegated_leaf_content.content | b64decode }}"
+        dest: "{{ openbao_node_subca_bootstrap_leaf_file }}"
+        owner: root
+        group: root
+        mode: "0644"
+  always:
+    - name: Remove delegated node sub-CA signing workspace
+      ansible.builtin.file:
+        path: "{{ openbao_node_subca_delegated_signing_tempdir.path | default('/tmp/openbao-node-subca-missing') }}"
+        state: absent
+      delegate_to: "{{ openbao_node_subca_bootstrap_signer_host }}"
+      when: openbao_node_subca_delegated_signing_tempdir is defined
+
+- name: Read issued node sub-CA bootstrap listener leaf
+  ansible.builtin.slurp:
+    src: "{{ openbao_node_subca_bootstrap_leaf_file }}"
+  register: openbao_node_subca_bootstrap_leaf_content
+  when: openbao_node_subca_bootstrap_issue_needed | bool
+
+- name: Read node sub-CA bootstrap signer chain
+  ansible.builtin.slurp:
+    src: "{{ hostvars[openbao_node_subca_bootstrap_signer_host].openbao_node_subca_chain_file }}"
+  delegate_to: "{{ openbao_node_subca_bootstrap_signer_host }}"
+  register: openbao_node_subca_bootstrap_signer_chain_content
+  when: openbao_node_subca_bootstrap_issue_needed | bool
+
+- name: Build node sub-CA bootstrap listener fullchain
+  ansible.builtin.copy:
+    content: |
+      {{ openbao_node_subca_bootstrap_leaf_content.content | b64decode | trim }}
+      {{ openbao_node_subca_bootstrap_signer_chain_content.content | b64decode | trim }}
+    dest: "{{ openbao_node_subca_bootstrap_fullchain_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: openbao_node_subca_bootstrap_issue_needed | bool

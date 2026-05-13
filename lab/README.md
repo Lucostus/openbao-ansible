@@ -41,6 +41,31 @@ Agent AppRole artifacts under `secure-artifacts/lab/openbao/`, starts
 `openbao-agent`, and validates Agent-issued listener certificates for
 `bao.lab.local` and each node FQDN.
 
+Node sub-CA bootstrap and PKI signing with one signer:
+
+```bash
+lab/scripts/openbao-lab-reset.sh --all --build
+lab/scripts/openbao-lab-generate-inputs.sh
+docker compose -f lab/compose.yml up -d --build
+lab/scripts/openbao-lab-install-subca.sh one
+lab/scripts/openbao-lab-playbook.sh site \
+  -e openbao_certificate_mode=agent \
+  -e openbao_bootstrap_tls_source=node \
+  -e openbao_bootstrap_tls_missing_strategy=issue_from_node_subca \
+  -e openbao_pki_signing_source=node_subca \
+  -e openbao_node_subca_chain_file=/etc/openbao-subca/subca-chain.pem
+curl --resolve bao.lab.local:8443:127.0.0.1 \
+  --cacert secure-artifacts/lab/subca/subca-chain.pem \
+  https://bao.lab.local:8443/v1/sys/health
+```
+
+All-node sub-CA bootstrap uses the same extra vars after installing the lab
+sub-CA on every node:
+
+```bash
+lab/scripts/openbao-lab-install-subca.sh all
+```
+
 Full staged test from clean volumes:
 
 ```bash

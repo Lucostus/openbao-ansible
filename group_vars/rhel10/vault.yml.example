@@ -7,9 +7,10 @@
 # Vault, set openbao_static_seal_source=variable.
 # openbao_static_unseal_key_b64: "REPLACE_WITH_32_BYTE_BASE64_KEY"
 
-# Production best practice is an offline root CA. These values are required
-# only when enabling OpenBao Agent or native listener ACME renewal with the
-# variable-based PKI signing source.
+# Production best practice is an offline root CA. These values are required only
+# when enabling OpenBao Agent or native listener ACME renewal with the
+# variable-based PKI signing source. They are not required when using
+# openbao_pki_signing_source=node_subca and node-hosted subordinate CA material.
 openbao_root_ca_cert_pem: |
   -----BEGIN CERTIFICATE-----
   REPLACE_WITH_ROOT_CA_CERTIFICATE

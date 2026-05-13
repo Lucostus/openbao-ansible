@@ -12,6 +12,20 @@
 - name: Resolve bootstrap TLS source inputs
   ansible.builtin.include_tasks: resolve_bootstrap_tls.yml
 
+- name: Install OpenBao node sub-CA trust bundle
+  ansible.builtin.copy:
+    content: |
+      {% for openbao_node_subca_chain in openbao_node_subca_chain_contents %}
+      {{ openbao_node_subca_chain | trim }}
+      {% endfor %}
+    dest: "{{ openbao_managed_ca_cert_file }}"
+    owner: root
+    group: "{{ openbao_service_group }}"
+    mode: "0644"
+  when:
+    - openbao_tls_trust_source == 'node_subca'
+      or openbao_bootstrap_tls_effective_source | default('') == 'generated_node_subca'
+
 - name: Set generated bootstrap certificate SANs
   ansible.builtin.set_fact:
     openbao_bootstrap_selfsigned_dns_subject_alt_names: >-
@@ -40,6 +54,7 @@
   when:
     - openbao_bootstrap_tls_install_needed | bool
     - openbao_bootstrap_tls_using_selfsigned | bool
+      or openbao_bootstrap_tls_using_node_subca | bool
 
 - name: Create generated bootstrap TLS artifact directory
   ansible.builtin.file:
@@ -166,6 +181,12 @@
     - openbao_bootstrap_tls_install_needed | bool
     - openbao_bootstrap_tls_using_selfsigned | bool
 
+- name: Issue node sub-CA bootstrap TLS material
+  ansible.builtin.include_tasks: issue_node_subca_bootstrap_tls.yml
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_effective_source | default('') == 'generated_node_subca'
+
 - name: Install generated bootstrap CA certificate
   ansible.builtin.copy:
     src: "{{ openbao_bootstrap_selfsigned_ca_cert }}"
@@ -201,6 +222,33 @@
   when:
     - openbao_bootstrap_tls_install_needed | bool
     - openbao_bootstrap_tls_effective_source | default('') == 'generated_selfsigned'
+
+- name: Install node sub-CA bootstrap OpenBao listener certificate
+  ansible.builtin.copy:
+    remote_src: true
+    src: "{{ openbao_bootstrap_tls_effective_cert }}"
+    dest: "{{ openbao_tls_cert_file }}"
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0640"
+  notify: Restart OpenBao
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_effective_source | default('') == 'generated_node_subca'
+
+- name: Install node sub-CA bootstrap OpenBao listener private key
+  ansible.builtin.copy:
+    remote_src: true
+    src: "{{ openbao_bootstrap_tls_effective_key }}"
+    dest: "{{ openbao_tls_key_file }}"
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "0600"
+  notify: Restart OpenBao
+  no_log: true
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_effective_source | default('') == 'generated_node_subca'
 
 - name: Install controller bootstrap OpenBao listener certificate
   ansible.builtin.copy:

@@ -4,12 +4,16 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SSH_DIR="${ROOT_DIR}/secure-artifacts/lab/ssh"
 CA_DIR="${ROOT_DIR}/secure-artifacts/lab/ca"
+SUBCA_DIR="${ROOT_DIR}/secure-artifacts/lab/subca"
 OPENBAO_DIR="${ROOT_DIR}/secure-artifacts/lab/openbao"
 BOOTSTRAP_DIR="${ROOT_DIR}/files/bootstrap-tls"
 VAULT_FILE="${ROOT_DIR}/secure-artifacts/lab/vault.yml"
 STATIC_KEY_FILE="${ROOT_DIR}/secure-artifacts/lab/static-unseal.key.b64"
 CA_KEY="${CA_DIR}/root-ca.key.pem"
 CA_CERT="${CA_DIR}/root-ca.pem"
+SUBCA_KEY="${SUBCA_DIR}/subca.key.pem"
+SUBCA_CERT="${SUBCA_DIR}/subca.pem"
+SUBCA_CHAIN="${SUBCA_DIR}/subca-chain.pem"
 PUBLIC_FQDN="bao.lab.local"
 
 hosts=(
@@ -19,7 +23,7 @@ hosts=(
 )
 
 umask 077
-mkdir -p "${SSH_DIR}" "${CA_DIR}" "${OPENBAO_DIR}" "${BOOTSTRAP_DIR}"
+mkdir -p "${SSH_DIR}" "${CA_DIR}" "${SUBCA_DIR}" "${OPENBAO_DIR}" "${BOOTSTRAP_DIR}"
 
 if [[ ! -f "${SSH_DIR}/id_ed25519" ]]; then
   ssh-keygen -t ed25519 -N "" -C "openbao-docker-lab" -f "${SSH_DIR}/id_ed25519" >/dev/null
@@ -49,6 +53,30 @@ chmod 0600 "${STATIC_KEY_FILE}"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
+
+if [[ ! -f "${SUBCA_KEY}" && ! -f "${SUBCA_CERT}" ]]; then
+  subca_csr="${tmp_dir}/subca.csr"
+  subca_ext="${tmp_dir}/subca.ext"
+  cat > "${subca_ext}" <<EOF
+[v3_intermediate_ca]
+basicConstraints = critical,CA:true,pathlen:1
+keyUsage = critical,digitalSignature,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+EOF
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out "${SUBCA_KEY}" >/dev/null 2>&1
+  openssl req -new -key "${SUBCA_KEY}" -subj "/CN=OpenBao Docker Lab Sub CA" \
+    -out "${subca_csr}" >/dev/null 2>&1
+  openssl x509 -req -in "${subca_csr}" -CA "${CA_CERT}" -CAkey "${CA_KEY}" -CAcreateserial \
+    -days 1825 -sha256 -extfile "${subca_ext}" -extensions v3_intermediate_ca \
+    -out "${SUBCA_CERT}" >/dev/null 2>&1
+elif [[ ! -f "${SUBCA_KEY}" || ! -f "${SUBCA_CERT}" ]]; then
+  echo "Missing one of ${SUBCA_KEY} or ${SUBCA_CERT}; remove both to regenerate the lab sub-CA." >&2
+  exit 1
+fi
+cat "${SUBCA_CERT}" "${CA_CERT}" > "${SUBCA_CHAIN}"
+chmod 0600 "${SUBCA_KEY}"
+chmod 0644 "${SUBCA_CERT}" "${SUBCA_CHAIN}"
 
 for item in "${hosts[@]}"; do
   inventory_host="${item%%:*}"
@@ -111,5 +139,6 @@ Generated lab inputs:
   SSH key: ${SSH_DIR}/id_ed25519
   Lab vault vars: ${VAULT_FILE}
   Root CA: ${CA_CERT}
+  Sub CA: ${SUBCA_CHAIN}
   Bootstrap TLS: ${BOOTSTRAP_DIR}/rhel10-ansible-*.fullchain.pem
 EOF

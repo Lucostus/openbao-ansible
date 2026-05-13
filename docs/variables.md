@@ -15,6 +15,7 @@ target is `rhel10`; prod/test runs select `openbao-prod` or `openbao-test` with
 - `openbao_bootstrap_tls_source`
 - `openbao_node_bootstrap_tls_dir`
 - `openbao_bootstrap_tls_missing_strategy`
+- `openbao_pki_signing_source`
 - `openbao_manage_hosts_entries`
 - `openbao_tls_trust_source`
 - `openbao_manage_firewalld`
@@ -47,7 +48,9 @@ TLS material is read from the selected hosts, and the static seal key is
 generated once under ignored `secure-artifacts/<target>/static-unseal.key.b64`.
 
 Create and encrypt `group_vars/<target>/vault.yml` only when you enable Agent
-or native ACME renewal with variable-based PKI signing.
+or native ACME renewal with variable-based PKI signing. Vaulted root CA material
+is not required when renewal uses a node-hosted subordinate CA with
+`openbao_pki_signing_source=node_subca`.
 
 Renewal-mode PKI values:
 
@@ -148,6 +151,46 @@ A partial real pair always fails. This prevents drifting into generated
 certificates when a certificate was copied without its matching key, or the key
 was copied without its matching certificate.
 
+If one OpenBao node, or every OpenBao node, already has a subordinate CA
+certificate and key, bootstrap listener certificates can be issued from that
+node-hosted sub-CA instead of the controller-generated temporary CA:
+
+```yaml
+openbao_certificate_mode: agent
+openbao_bootstrap_tls_source: node
+openbao_bootstrap_tls_missing_strategy: issue_from_node_subca
+openbao_pki_signing_source: node_subca
+openbao_node_subca_topology: auto
+```
+
+Default node sub-CA paths:
+
+```yaml
+openbao_node_subca_cert_file: /etc/openbao-subca/subca.pem
+openbao_node_subca_key_file: /etc/openbao-subca/subca.key.pem
+openbao_node_subca_chain_file: "{{ openbao_node_subca_cert_file }}"
+```
+
+When the subordinate CA is issued by another CA, point
+`openbao_node_subca_chain_file` at a PEM bundle that lets OpenSSL verify the
+sub-CA certificate, for example `/etc/openbao-subca/subca-chain.pem` containing
+the sub-CA followed by its issuing root or intermediate chain.
+If `openbao_pki_signing_source=node_subca` is used, the node sub-CA must also
+be allowed to sign an OpenBao intermediate CA, so its CA path length constraint
+must permit at least one subordinate CA below it.
+
+With `openbao_node_subca_topology=auto`, exactly one complete sub-CA host signs
+bootstrap certificates for all nodes. If all three nodes have complete sub-CA
+material, each node signs its own bootstrap certificate. Two complete sub-CA
+hosts is ambiguous and fails. Use `single_signer` with
+`openbao_node_subca_signer_host` to force one signer, or `every_node` to require
+local sub-CA material on every OpenBao node.
+
+Node sub-CA bootstrap certificates are generated under
+`openbao_node_subca_bootstrap_artifact_dir` on each managed node. The listener
+private key never leaves that node. When a single signer is used, only CSRs and
+public certificates move between nodes.
+
 `controller` reads cert/key material from the Ansible controller using
 `openbao_controller_bootstrap_tls_cert` and
 `openbao_controller_bootstrap_tls_key`. The Docker lab uses this path.
@@ -180,11 +223,13 @@ Then rerun:
 ansible-playbook playbooks/site.yml
 ```
 
-Before enabling Agent renewal, provide a PKI signing source such as vaulted
-`openbao_root_ca_cert_pem` and `openbao_root_ca_key_pem`. The rerun reuses the
-initialized cluster, configures OpenBao PKI, creates any missing per-node Agent
-AppRole artifacts, installs `openbao-agent`, and replaces the bootstrap
-listener certs with Agent-issued certs.
+Before enabling Agent renewal, provide a PKI signing source. The default is
+vaulted `openbao_root_ca_cert_pem` and `openbao_root_ca_key_pem`; alternatively,
+set `openbao_pki_signing_source=node_subca` and place the subordinate CA
+material on one or all OpenBao nodes. The rerun reuses the initialized cluster,
+configures OpenBao PKI, creates any missing per-node Agent AppRole artifacts,
+installs `openbao-agent`, and replaces the bootstrap listener certs with
+Agent-issued certs.
 
 ## Static Seal
 
@@ -225,6 +270,11 @@ openbao_tls_trust_file: /path/to/ca.pem
 For the legacy vaulted CA flow, keep `openbao_root_ca_cert_pem` in
 `group_vars/<target>/vault.yml`; the default trust source switches to
 `variable` when that value is present.
+
+When node sub-CA bootstrap or PKI signing is selected, the default trust source
+switches to `node_subca`. The role installs a deduplicated public sub-CA trust
+bundle at `openbao_managed_ca_cert_file` and uses it for CLI checks, Raft joins,
+Agent certificate validation, and final listener validation.
 
 ## Renamed Variables
 

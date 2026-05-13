@@ -42,6 +42,7 @@
     openbao_bootstrap_tls_effective_cert: ""
     openbao_bootstrap_tls_effective_key: ""
     openbao_bootstrap_tls_using_selfsigned: false
+    openbao_bootstrap_tls_using_node_subca: false
 
 - name: Assert node bootstrap TLS is only used for Agent or bootstrap certificate modes
   ansible.builtin.assert:
@@ -263,6 +264,20 @@
     - openbao_bootstrap_tls_effective_cert | length == 0
     - openbao_bootstrap_tls_effective_key | length == 0
 
+- name: Set generated node sub-CA bootstrap TLS source facts
+  ansible.builtin.set_fact:
+    openbao_bootstrap_tls_effective_source: generated_node_subca
+    openbao_bootstrap_tls_effective_cert: "{{ openbao_node_subca_bootstrap_fullchain_file }}"
+    openbao_bootstrap_tls_effective_key: "{{ openbao_node_subca_bootstrap_key_file }}"
+    openbao_bootstrap_tls_using_node_subca: true
+    openbao_ca_cert_file: "{{ openbao_managed_ca_cert_file }}"
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'node'
+    - openbao_bootstrap_tls_missing_strategy == 'issue_from_node_subca'
+    - openbao_bootstrap_tls_effective_cert | length == 0
+    - openbao_bootstrap_tls_effective_key | length == 0
+
 - name: Assert generated bootstrap TLS fallback is cluster-wide
   ansible.builtin.assert:
     that:
@@ -278,6 +293,26 @@
       fallback cannot be mixed in the same OpenBao cluster. Place the real
       cert/key pair on every node, or remove the partial real material so all
       nodes use the generated fallback.
+  run_once: true
+  when:
+    - openbao_bootstrap_tls_install_needed | bool
+    - openbao_bootstrap_tls_source == 'node'
+
+- name: Assert generated node sub-CA bootstrap TLS fallback is cluster-wide
+  ansible.builtin.assert:
+    that:
+      - >-
+        groups[openbao_cluster_group]
+        | map('extract', hostvars, 'openbao_bootstrap_tls_using_node_subca')
+        | map('bool')
+        | unique
+        | list
+        | length == 1
+    fail_msg: >-
+      Real node bootstrap TLS files and generated node sub-CA bootstrap TLS
+      cannot be mixed in the same OpenBao cluster. Place the real cert/key pair
+      on every node, or remove the partial real material so all nodes issue
+      bootstrap certificates from the node sub-CA.
   run_once: true
   when:
     - openbao_bootstrap_tls_install_needed | bool

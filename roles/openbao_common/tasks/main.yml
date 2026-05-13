@@ -4,6 +4,13 @@
     openbao_package_prefix: "{{ openbao_package_prefix_overrides[openbao_version] | default('openbao') }}"
     openbao_package_file: "{{ openbao_package_prefix_overrides[openbao_version] | default('openbao') }}_{{ openbao_version }}_linux_{{ openbao_release_arch }}.rpm"
 
+- name: Resolve node sub-CA topology
+  ansible.builtin.include_tasks: node_subca_facts.yml
+  when:
+    - openbao_bootstrap_tls_missing_strategy == 'issue_from_node_subca'
+      or openbao_pki_signing_source == 'node_subca'
+      or openbao_tls_trust_source == 'node_subca'
+
 - name: Run deployment preflight checks
   ansible.builtin.include_tasks: preflight.yml
   when: openbao_validate_bootstrap_inputs | bool

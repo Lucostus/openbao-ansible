@@ -11,11 +11,12 @@
     that:
       - openbao_certificate_mode in ['agent', 'native_acme', 'bootstrap']
       - openbao_bootstrap_tls_source in ['controller', 'node']
-      - openbao_bootstrap_tls_missing_strategy in ['fail', 'generate_self_signed']
+      - openbao_bootstrap_tls_missing_strategy in ['fail', 'generate_self_signed', 'issue_from_node_subca']
       - openbao_bootstrap_tls_source != 'node' or openbao_certificate_mode in ['agent', 'bootstrap']
       - openbao_static_seal_source in ['generated_artifact', 'variable']
-      - openbao_tls_trust_source in ['system', 'variable', 'file']
-      - openbao_pki_signing_source in ['variable']
+      - openbao_tls_trust_source in ['system', 'variable', 'file', 'node_subca']
+      - openbao_pki_signing_source in ['variable', 'node_subca']
+      - openbao_node_subca_topology in ['auto', 'single_signer', 'every_node']
       - not (openbao_agent_enabled | bool) or openbao_pki_enabled | bool
       - not (openbao_native_acme_enabled | bool) or openbao_pki_enabled | bool
       - openbao_native_acme_challenge in ['http-01', 'tls-alpn-01']
@@ -25,9 +26,35 @@
       - openbao_public_fqdn | length > 0
       - openbao_node_fqdn | length > 0
       - openbao_ca_cert_file is match('^/')
+      - openbao_node_subca_cert_file is match('^/')
+      - openbao_node_subca_key_file is match('^/')
+      - openbao_node_subca_chain_file is match('^/')
+      - openbao_node_subca_bootstrap_artifact_dir is match('^/')
+      - openbao_node_subca_bootstrap_key_file is match('^/')
+      - openbao_node_subca_bootstrap_csr_file is match('^/')
+      - openbao_node_subca_bootstrap_leaf_file is match('^/')
+      - openbao_node_subca_bootstrap_fullchain_file is match('^/')
+      - openbao_bootstrap_tls_missing_strategy != 'issue_from_node_subca' or openbao_bootstrap_tls_source == 'node'
       - not (openbao_native_acme_bootstrap_api_enabled | bool) or openbao_native_acme_bootstrap_api_port | int != openbao_listener_port | int
       - not (openbao_native_acme_bootstrap_api_enabled | bool) or openbao_native_acme_bootstrap_api_port | int != openbao_cluster_port | int
     fail_msg: "OpenBao TLS/LB/ACME variables are invalid; check the selected group_vars main.yml."
+
+- name: Assert node sub-CA signing topology was resolved
+  ansible.builtin.assert:
+    that:
+      - openbao_node_subca_available_hosts | default([]) | length > 0
+      - openbao_node_subca_pki_signer_host | default('') in groups[openbao_cluster_group]
+      - openbao_node_subca_pki_signer_host in openbao_node_subca_available_hosts
+      - openbao_node_subca_chain_contents | default([]) | length > 0
+      - "'BEGIN CERTIFICATE' in (openbao_node_subca_cluster_trust_bundle | default(''))"
+      - >-
+        openbao_node_subca_topology != 'auto'
+        or openbao_node_subca_available_hosts | length in [1, groups[openbao_cluster_group] | length]
+    fail_msg: "Node sub-CA signing is selected, but the signer topology was not resolved cleanly."
+  when:
+    - openbao_bootstrap_tls_missing_strategy == 'issue_from_node_subca'
+      or openbao_pki_signing_source == 'node_subca'
+      or openbao_tls_trust_source == 'node_subca'
 
 - name: Assert advertised OpenBao addresses match the TLS listener
   ansible.builtin.assert:

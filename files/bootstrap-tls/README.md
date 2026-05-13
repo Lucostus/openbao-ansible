@@ -20,6 +20,12 @@ a temporary bootstrap CA plus per-node listener certificates under ignored
 place later and rerun `playbooks/site.yml` to replace the generated listener
 certificates.
 
+As an alternative, `openbao_bootstrap_tls_missing_strategy=issue_from_node_subca`
+can issue first-run listener certificates from a subordinate CA already present
+on one OpenBao node or on all OpenBao nodes. The generated listener private key
+stays on its target node; delegated signing moves only CSRs and public
+certificates.
+
 Controller bootstrap uses one pair per inventory host. Expected default names:
 
 - `rhel10-ansible-1.fullchain.pem`

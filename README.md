@@ -32,9 +32,12 @@ Later, enable Agent renewal by changing only:
 openbao_certificate_mode: agent
 ```
 
-Before enabling Agent renewal, add a PKI signing source such as
-`openbao_root_ca_cert_pem` and `openbao_root_ca_key_pem` in an encrypted
-environment vault. Then rerun:
+Before enabling Agent renewal, add a PKI signing source. The default signing
+source is `openbao_root_ca_cert_pem` and `openbao_root_ca_key_pem` in an
+encrypted environment vault. Environments with a subordinate CA already on one
+or all OpenBao nodes can instead use `openbao_pki_signing_source=node_subca`.
+Then rerun. Use `--ask-vault-pass` only when encrypted vault variables are
+needed:
 
 ```bash
 ansible-playbook playbooks/site.yml --ask-vault-pass
@@ -108,6 +111,24 @@ for first deployment. After the real cert/key files are placed at the per-node
 paths, rerun `playbooks/site.yml`; the playbook replaces the generated listener
 certs and validates against the configured trust source again. A partial real
 pair, such as a cert without its key, fails instead of falling back.
+
+If one node, or every node, has a subordinate CA at `/etc/openbao-subca/`, use
+node-subCA bootstrap and PKI signing:
+
+```yaml
+openbao_certificate_mode: agent
+openbao_bootstrap_tls_source: node
+openbao_bootstrap_tls_missing_strategy: issue_from_node_subca
+openbao_pki_signing_source: node_subca
+openbao_node_subca_topology: auto
+openbao_node_subca_chain_file: /etc/openbao-subca/subca-chain.pem
+```
+
+With one complete sub-CA host, that host signs bootstrap CSRs for the cluster.
+With complete sub-CA material on all three hosts, each node signs locally.
+Private sub-CA keys are never copied to the controller or to other nodes. Use a
+chain file containing the sub-CA and its issuer chain when the sub-CA is not a
+self-signed trust anchor.
 
 ## Deploy
 

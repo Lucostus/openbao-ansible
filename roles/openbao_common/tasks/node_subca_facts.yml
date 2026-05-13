@@ -1,0 +1,237 @@
+---
+- name: Check node sub-CA certificate
+  ansible.builtin.stat:
+    path: "{{ openbao_node_subca_cert_file }}"
+  register: openbao_node_subca_cert_stat
+
+- name: Check node sub-CA private key
+  ansible.builtin.stat:
+    path: "{{ openbao_node_subca_key_file }}"
+  register: openbao_node_subca_key_stat
+  no_log: true
+
+- name: Check node sub-CA chain
+  ansible.builtin.stat:
+    path: "{{ openbao_node_subca_chain_file }}"
+  register: openbao_node_subca_chain_stat
+
+- name: Set node sub-CA material facts
+  ansible.builtin.set_fact:
+    openbao_node_subca_cert_exists: "{{ openbao_node_subca_cert_stat.stat.exists | default(false) }}"
+    openbao_node_subca_key_exists: "{{ openbao_node_subca_key_stat.stat.exists | default(false) }}"
+    openbao_node_subca_chain_exists: "{{ openbao_node_subca_chain_stat.stat.exists | default(false) }}"
+    openbao_node_subca_material_complete: >-
+      {{
+        (openbao_node_subca_cert_stat.stat.exists | default(false))
+        and (openbao_node_subca_key_stat.stat.exists | default(false))
+        and (openbao_node_subca_chain_stat.stat.exists | default(false))
+      }}
+    openbao_node_subca_material_partial: >-
+      {{
+        (
+          (openbao_node_subca_cert_stat.stat.exists | default(false))
+          or (openbao_node_subca_key_stat.stat.exists | default(false))
+          or (openbao_node_subca_chain_stat.stat.exists | default(false))
+        )
+        and not (
+          (openbao_node_subca_cert_stat.stat.exists | default(false))
+          and (openbao_node_subca_key_stat.stat.exists | default(false))
+          and (openbao_node_subca_chain_stat.stat.exists | default(false))
+        )
+      }}
+
+- name: Assert node sub-CA material is complete when present
+  ansible.builtin.assert:
+    that:
+      - not (hostvars[item].openbao_node_subca_material_partial | bool)
+    fail_msg: >-
+      Node sub-CA material on {{ item }} is incomplete. Expected certificate
+      {{ hostvars[item].openbao_node_subca_cert_file }}, private key
+      {{ hostvars[item].openbao_node_subca_key_file }}, and chain
+      {{ hostvars[item].openbao_node_subca_chain_file }} to be present together,
+      or all absent.
+  loop: "{{ groups[openbao_cluster_group] }}"
+  run_once: true
+
+- name: Validate node sub-CA certificate chain
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - verify
+      - -CAfile
+      - "{{ openbao_node_subca_chain_file }}"
+      - "{{ openbao_node_subca_cert_file }}"
+  register: openbao_node_subca_chain_verify
+  changed_when: false
+  failed_when: openbao_node_subca_chain_verify.rc != 0
+  when: openbao_node_subca_material_complete | bool
+
+- name: Initialize node sub-CA available host list
+  ansible.builtin.set_fact:
+    openbao_node_subca_resolved_available_hosts: []
+  run_once: true
+
+- name: Build node sub-CA available host list
+  ansible.builtin.set_fact:
+    openbao_node_subca_resolved_available_hosts: "{{ openbao_node_subca_resolved_available_hosts + [item] }}"
+  loop: "{{ groups[openbao_cluster_group] }}"
+  when: hostvars[item].openbao_node_subca_material_complete | bool
+  run_once: true
+
+- name: Assert node sub-CA topology is valid
+  ansible.builtin.assert:
+    that:
+      - openbao_node_subca_topology in ['auto', 'single_signer', 'every_node']
+    fail_msg: "openbao_node_subca_topology must be auto, single_signer, or every_node."
+  run_once: true
+
+- name: Assert automatic node sub-CA topology is unambiguous
+  ansible.builtin.assert:
+    that:
+      - openbao_node_subca_resolved_available_hosts | length in [1, groups[openbao_cluster_group] | length]
+    fail_msg: >-
+      openbao_node_subca_topology=auto requires exactly one node with complete
+      sub-CA material or every OpenBao node with complete sub-CA material. Found
+      {{ openbao_node_subca_resolved_available_hosts | length }} complete hosts:
+      {{ openbao_node_subca_resolved_available_hosts | join(', ') }}.
+  when: openbao_node_subca_topology == 'auto'
+  run_once: true
+
+- name: Assert every-node sub-CA topology has material on all nodes
+  ansible.builtin.assert:
+    that:
+      - openbao_node_subca_resolved_available_hosts | length == groups[openbao_cluster_group] | length
+    fail_msg: >-
+      openbao_node_subca_topology=every_node requires complete sub-CA material
+      on every OpenBao node. Complete hosts:
+      {{ openbao_node_subca_resolved_available_hosts | join(', ') }}.
+  when: openbao_node_subca_topology == 'every_node'
+  run_once: true
+
+- name: Assert single-signer node sub-CA topology is explicit when ambiguous
+  ansible.builtin.assert:
+    that:
+      - openbao_node_subca_signer_host | length > 0 or openbao_node_subca_resolved_available_hosts | length == 1
+    fail_msg: >-
+      openbao_node_subca_topology=single_signer requires
+      openbao_node_subca_signer_host when more than one node has complete
+      sub-CA material. Complete hosts:
+      {{ openbao_node_subca_resolved_available_hosts | join(', ') }}.
+  when: openbao_node_subca_topology == 'single_signer'
+  run_once: true
+
+- name: Set single node sub-CA signer host
+  ansible.builtin.set_fact:
+    openbao_node_subca_resolved_single_signer_host: >-
+      {{
+        openbao_node_subca_signer_host
+        if openbao_node_subca_signer_host | length > 0
+        else (openbao_node_subca_resolved_available_hosts | first | default(''))
+      }}
+  when:
+    - openbao_node_subca_topology == 'single_signer'
+      or (
+        openbao_node_subca_topology == 'auto'
+        and openbao_node_subca_resolved_available_hosts | length == 1
+      )
+  run_once: true
+
+- name: Assert single node sub-CA signer host is valid
+  ansible.builtin.assert:
+    that:
+      - openbao_node_subca_resolved_single_signer_host | default('') | length > 0
+      - openbao_node_subca_resolved_single_signer_host in groups[openbao_cluster_group]
+      - openbao_node_subca_resolved_single_signer_host in openbao_node_subca_resolved_available_hosts
+    fail_msg: >-
+      The selected node sub-CA signer host must be a member of
+      {{ openbao_cluster_group }} with complete sub-CA material. Selected:
+      {{ openbao_node_subca_resolved_single_signer_host | default('') }}.
+      Complete hosts: {{ openbao_node_subca_resolved_available_hosts | join(', ') }}.
+  when:
+    - openbao_node_subca_topology == 'single_signer'
+      or (
+        openbao_node_subca_topology == 'auto'
+        and openbao_node_subca_resolved_available_hosts | length == 1
+      )
+  run_once: true
+
+- name: Set node sub-CA PKI signer host
+  ansible.builtin.set_fact:
+    openbao_node_subca_resolved_pki_signer_host: >-
+      {{
+        openbao_node_subca_pki_signer_host
+        if openbao_node_subca_pki_signer_host | length > 0
+        else openbao_node_subca_resolved_single_signer_host
+        if openbao_node_subca_resolved_single_signer_host | default('') | length > 0
+        else (openbao_node_subca_resolved_available_hosts | first | default(''))
+      }}
+  run_once: true
+
+- name: Assert node sub-CA PKI signer host is valid
+  ansible.builtin.assert:
+    that:
+      - openbao_node_subca_resolved_pki_signer_host | length > 0
+      - openbao_node_subca_resolved_pki_signer_host in groups[openbao_cluster_group]
+      - openbao_node_subca_resolved_pki_signer_host in openbao_node_subca_resolved_available_hosts
+    fail_msg: >-
+      The node sub-CA PKI signer host must be a member of
+      {{ openbao_cluster_group }} with complete sub-CA material. Selected:
+      {{ openbao_node_subca_resolved_pki_signer_host }}. Complete hosts:
+      {{ openbao_node_subca_resolved_available_hosts | join(', ') }}.
+  run_once: true
+
+- name: Read node sub-CA public chains
+  ansible.builtin.slurp:
+    src: "{{ hostvars[item].openbao_node_subca_chain_file }}"
+  delegate_to: "{{ item }}"
+  register: openbao_node_subca_chain_slurps
+  loop: "{{ openbao_node_subca_resolved_available_hosts }}"
+  run_once: true
+
+- name: Build node sub-CA trust chain content list
+  ansible.builtin.set_fact:
+    openbao_node_subca_resolved_chain_contents: >-
+      {{
+        openbao_node_subca_chain_slurps.results
+        | map(attribute='content')
+        | map('b64decode')
+        | map('trim')
+        | unique
+        | list
+      }}
+  run_once: true
+
+- name: Build node sub-CA trust bundle
+  ansible.builtin.set_fact:
+    openbao_node_subca_resolved_cluster_trust_bundle: "{{ openbao_node_subca_resolved_chain_contents | join('\n') }}"
+  run_once: true
+
+- name: Assert node sub-CA trust bundle contains certificates
+  ansible.builtin.assert:
+    that:
+      - "'BEGIN CERTIFICATE' in openbao_node_subca_resolved_cluster_trust_bundle"
+    fail_msg: "The node sub-CA trust bundle did not contain any PEM certificates."
+  run_once: true
+
+- name: Distribute resolved node sub-CA facts
+  ansible.builtin.set_fact:
+    openbao_node_subca_available_hosts: "{{ openbao_node_subca_resolved_available_hosts }}"
+    openbao_node_subca_chain_contents: "{{ openbao_node_subca_resolved_chain_contents }}"
+    openbao_node_subca_bootstrap_signer_host: >-
+      {{
+        item
+        if (
+          openbao_node_subca_topology == 'every_node'
+          or (
+            openbao_node_subca_topology == 'auto'
+            and openbao_node_subca_resolved_available_hosts | length == groups[openbao_cluster_group] | length
+          )
+        )
+        else openbao_node_subca_resolved_single_signer_host
+      }}
+    openbao_node_subca_pki_signer_host: "{{ openbao_node_subca_resolved_pki_signer_host }}"
+    openbao_node_subca_cluster_trust_bundle: "{{ openbao_node_subca_resolved_cluster_trust_bundle }}"
+  delegate_to: "{{ item }}"
+  delegate_facts: true
+  loop: "{{ groups[openbao_cluster_group] }}"
+  run_once: true
