@@ -135,6 +135,15 @@ needed when replacing an already-installed listener cert/key pair, and the
 disabled bootstrap TLS auto-detection prevents old node certs from being used
 instead of issuing from the sub-CA.
 
+To build the public chain file on the signer node:
+
+```bash
+sudo scripts/openbao-build-subca-chain.sh \
+  --subca-cert /usr/local/lib/openbao/subCA-example.at.cer \
+  --issuer-cert /etc/pki/ca-trust/source/anchors/example-root.pem \
+  --out /usr/local/lib/openbao/subCA-example.at-chain.pem
+```
+
 ## Deploy
 
 Install collections:

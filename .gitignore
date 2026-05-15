@@ -12,6 +12,8 @@
 !/playbooks/**
 !/roles/
 !/roles/**
+!/scripts/
+!/scripts/**
 !/README.md
 !/OPENBAO_ORIGINAL_PLAN.md
 !/AGENTS.md

@@ -204,6 +204,16 @@ If `openbao_pki_signing_source=node_subca` is used, the node sub-CA must also
 be allowed to sign an OpenBao intermediate CA, so its CA path length constraint
 must permit at least one subordinate CA below it.
 
+The repository includes a helper for building that public chain file on the
+signer node:
+
+```bash
+sudo scripts/openbao-build-subca-chain.sh \
+  --subca-cert /usr/local/lib/openbao/subCA-example.at.cer \
+  --issuer-cert /etc/pki/ca-trust/source/anchors/example-root.pem \
+  --out /usr/local/lib/openbao/subCA-example.at-chain.pem
+```
+
 With `openbao_node_subca_topology=auto`, exactly one complete sub-CA host signs
 bootstrap certificates for all nodes. If all three nodes have complete sub-CA
 material, each node signs its own bootstrap certificate. Two complete sub-CA
