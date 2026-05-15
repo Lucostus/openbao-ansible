@@ -18,6 +18,23 @@
   failed_when: false
   run_once: true
 
+- name: Assert OpenBao initialization status is readable
+  ansible.builtin.assert:
+    that:
+      - openbao_bootstrap_status.stdout | default('', true) | trim | length > 0
+      - openbao_bootstrap_status.stdout | trim is match('^\\{')
+    fail_msg: >-
+      Unable to read JSON OpenBao initialization status from
+      {{ openbao_bootstrap_host }}. bao status exited with rc={{
+      openbao_bootstrap_status.rc | default('unknown') }} and stderr={{
+      openbao_bootstrap_status.stderr | default('') | trim }}.
+  run_once: true
+
+- name: Parse OpenBao initialization status
+  ansible.builtin.set_fact:
+    openbao_bootstrap_status_data: "{{ openbao_bootstrap_status.stdout | from_json }}"
+  run_once: true
+
 - name: Create secure artifact directory on controller
   ansible.builtin.file:
     path: "{{ openbao_secure_artifacts_dir }}"
@@ -48,7 +65,7 @@
   changed_when: true
   no_log: true
   run_once: true
-  when: not ((openbao_bootstrap_status.stdout | default('{}') | from_json).initialized | default(false) | bool)
+  when: not (openbao_bootstrap_status_data.initialized | default(false) | bool)
 
 - name: Store OpenBao init output only on the controller
   ansible.builtin.copy:
@@ -74,8 +91,8 @@
   changed_when: false
   until:
     - openbao_node_status.rc == 0
-    - (openbao_node_status.stdout | from_json).initialized | default(false) | bool
-    - not ((openbao_node_status.stdout | from_json).sealed | default(true) | bool)
+    - (openbao_node_status.stdout | default('{}', true) | from_json).initialized | default(false) | bool
+    - not ((openbao_node_status.stdout | default('{}', true) | from_json).sealed | default(true) | bool)
   retries: 60
   delay: 5
 
