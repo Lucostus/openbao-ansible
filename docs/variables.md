@@ -14,6 +14,7 @@ target is `rhel10`; prod/test runs select `openbao-prod` or `openbao-test` with
 - `openbao_certificate_mode`
 - `openbao_bootstrap_tls_source`
 - `openbao_node_bootstrap_tls_dir`
+- `openbao_node_bootstrap_tls_autodetect`
 - `openbao_bootstrap_tls_missing_strategy`
 - `openbao_bootstrap_tls_replace_existing`
 - `openbao_pki_signing_source`
@@ -202,12 +203,11 @@ openbao_bootstrap_tls_replace_existing: true
 ```
 
 When replacing existing listener files with node-subCA-issued bootstrap certs,
-also make sure no old cert/key pair is auto-detected under
-`openbao_node_bootstrap_tls_dir`. Point it at an empty path, or set explicit
-empty paths:
+also disable old node bootstrap cert/key auto-detection so files under
+`openbao_node_bootstrap_tls_dir` are ignored:
 
 ```yaml
-openbao_node_bootstrap_tls_dir: /etc/openbao-no-bootstrap-certs-here
+openbao_node_bootstrap_tls_autodetect: false
 openbao_node_bootstrap_tls_cert: ""
 openbao_node_bootstrap_tls_key: ""
 ```
