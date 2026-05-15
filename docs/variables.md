@@ -15,6 +15,7 @@ target is `rhel10`; prod/test runs select `openbao-prod` or `openbao-test` with
 - `openbao_bootstrap_tls_source`
 - `openbao_node_bootstrap_tls_dir`
 - `openbao_bootstrap_tls_missing_strategy`
+- `openbao_bootstrap_tls_replace_existing`
 - `openbao_pki_signing_source`
 - `openbao_manage_hosts_entries`
 - `openbao_tls_trust_source`
@@ -190,6 +191,26 @@ Node sub-CA bootstrap certificates are generated under
 `openbao_node_subca_bootstrap_artifact_dir` on each managed node. The listener
 private key never leaves that node. When a single signer is used, only CSRs and
 public certificates move between nodes.
+
+In `agent` mode, existing listener files at `openbao_tls_cert_file` and
+`openbao_tls_key_file` are normally reused so reruns do not replace live TLS
+unnecessarily. To intentionally replace an existing bootstrap listener pair,
+for example to move away from an old self-signed cert, set:
+
+```yaml
+openbao_bootstrap_tls_replace_existing: true
+```
+
+When replacing existing listener files with node-subCA-issued bootstrap certs,
+also make sure no old cert/key pair is auto-detected under
+`openbao_node_bootstrap_tls_dir`. Point it at an empty path, or set explicit
+empty paths:
+
+```yaml
+openbao_node_bootstrap_tls_dir: /etc/openbao-no-bootstrap-certs-here
+openbao_node_bootstrap_tls_cert: ""
+openbao_node_bootstrap_tls_key: ""
+```
 
 `controller` reads cert/key material from the Ansible controller using
 `openbao_controller_bootstrap_tls_cert` and

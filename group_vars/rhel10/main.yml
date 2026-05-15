@@ -28,7 +28,11 @@ openbao_nodes:
 # If a subordinate CA exists on one or all OpenBao nodes, operators can set
 # openbao_bootstrap_tls_missing_strategy=issue_from_node_subca and
 # openbao_pki_signing_source=node_subca to bootstrap and renew from that sub-CA
-# without copying its private key off the managed node.
+# without copying its private key off the managed node. To replace an already
+# installed bootstrap listener cert/key, also set
+# openbao_bootstrap_tls_replace_existing=true and point
+# openbao_node_bootstrap_tls_dir at an empty path so old files are not
+# auto-detected.
 openbao_certificate_mode: bootstrap
 openbao_bootstrap_tls_source: node
 openbao_node_bootstrap_tls_dir: /usr/local/lib/cockpitcert

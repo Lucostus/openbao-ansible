@@ -58,6 +58,7 @@ openbao_node_bootstrap_tls_dir: /usr/local/lib/cockpitcert
 openbao_node_bootstrap_tls_cert: ""
 openbao_node_bootstrap_tls_key: ""
 openbao_bootstrap_tls_missing_strategy: generate_self_signed
+openbao_bootstrap_tls_replace_existing: false
 openbao_bootstrap_selfsigned_artifacts_dir: "{{ openbao_secure_artifacts_dir }}/bootstrap-selfsigned"
 openbao_bootstrap_selfsigned_ca_key: "{{ openbao_bootstrap_selfsigned_artifacts_dir }}/bootstrap-ca.key.pem"
 openbao_bootstrap_selfsigned_ca_cert: "{{ openbao_bootstrap_selfsigned_artifacts_dir }}/bootstrap-ca.pem"

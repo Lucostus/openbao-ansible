@@ -119,8 +119,10 @@ node-subCA bootstrap and PKI signing:
 openbao_certificate_mode: agent
 openbao_bootstrap_tls_source: node
 openbao_bootstrap_tls_missing_strategy: issue_from_node_subca
+openbao_bootstrap_tls_replace_existing: true
 openbao_pki_signing_source: node_subca
 openbao_node_subca_topology: auto
+openbao_node_bootstrap_tls_dir: /etc/openbao-no-bootstrap-certs-here
 openbao_node_subca_chain_file: /etc/openbao-subca/subca-chain.pem
 ```
 
@@ -128,7 +130,10 @@ With one complete sub-CA host, that host signs bootstrap CSRs for the cluster.
 With complete sub-CA material on all three hosts, each node signs locally.
 Private sub-CA keys are never copied to the controller or to other nodes. Use a
 chain file containing the sub-CA and its issuer chain when the sub-CA is not a
-self-signed trust anchor.
+self-signed trust anchor. `openbao_bootstrap_tls_replace_existing=true` is only
+needed when replacing an already-installed listener cert/key pair, and the
+empty bootstrap TLS directory prevents old node certs from being auto-detected
+instead of issuing from the sub-CA.
 
 ## Deploy
 
