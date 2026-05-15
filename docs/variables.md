@@ -210,9 +210,13 @@ signer node:
 ```bash
 sudo scripts/openbao-build-subca-chain.sh \
   --subca-cert /usr/local/lib/openbao/subCA-example.at.cer \
-  --issuer-cert /etc/pki/ca-trust/source/anchors/example-root.pem \
+  --issuer-cert /etc/pki/ca-trust/source/anchors \
   --out /usr/local/lib/openbao/subCA-example.at-chain.pem
 ```
+
+`--issuer-cert` accepts either one PEM file or a directory. When a directory is
+provided, every PEM certificate in that directory is appended after the sub-CA
+certificate and used as the verification trust bundle.
 
 With `openbao_node_subca_topology=auto`, exactly one complete sub-CA host signs
 bootstrap certificates for all nodes. If all three nodes have complete sub-CA

@@ -140,9 +140,13 @@ To build the public chain file on the signer node:
 ```bash
 sudo scripts/openbao-build-subca-chain.sh \
   --subca-cert /usr/local/lib/openbao/subCA-example.at.cer \
-  --issuer-cert /etc/pki/ca-trust/source/anchors/example-root.pem \
+  --issuer-cert /etc/pki/ca-trust/source/anchors \
   --out /usr/local/lib/openbao/subCA-example.at-chain.pem
 ```
+
+`--issuer-cert` may be a single PEM file or a directory such as
+`/etc/pki/ca-trust/source/anchors`; when it is a directory, all PEM
+certificates in that directory are included in the public issuer bundle.
 
 ## Deploy
 

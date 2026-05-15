@@ -13,7 +13,8 @@ Build a PEM chain file for openbao_node_subca_chain_file. The output contains:
 
 Options:
   --subca-cert PATH    PEM subCA certificate used by openbao_node_subca_cert_file.
-  --issuer-cert PATH   PEM parent/root CA certificate or issuer bundle.
+  --issuer-cert PATH   PEM parent/root CA certificate, issuer bundle, or a
+                       directory containing PEM certificate files.
   --out PATH           Output PEM chain file path.
   --mode MODE          Output mode. Default: 0644.
   --owner OWNER        Optional output owner.
@@ -23,7 +24,7 @@ Options:
 Example:
   sudo scripts/openbao-build-subca-chain.sh \
     --subca-cert /usr/local/lib/openbao/subCA-example.at.cer \
-    --issuer-cert /etc/pki/ca-trust/source/anchors/example-root.pem \
+    --issuer-cert /etc/pki/ca-trust/source/anchors \
     --out /usr/local/lib/openbao/subCA-example.at-chain.pem
 USAGE
 }
@@ -92,6 +93,7 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
 subca_only="${tmpdir}/subca.pem"
+issuer_bundle="${tmpdir}/issuer-bundle.pem"
 chain_candidate="${tmpdir}/chain.pem"
 
 awk '
@@ -110,13 +112,36 @@ if ! openssl x509 -in "$subca_only" -noout >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! openssl crl2pkcs7 -nocrl -certfile "$issuer_cert" \
+if [[ -d "$issuer_cert" ]]; then
+  issuer_files=()
+  while IFS= read -r -d '' issuer_file; do
+    issuer_files+=("$issuer_file")
+  done < <(find "$issuer_cert" -maxdepth 1 -type f -print0 | sort -z)
+
+  for issuer_file in "${issuer_files[@]}"; do
+    if grep -q -- '-----BEGIN CERTIFICATE-----' "$issuer_file"; then
+      sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' \
+        "$issuer_file" >> "$issuer_bundle"
+      printf '\n' >> "$issuer_bundle"
+    fi
+  done
+else
+  sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' \
+    "$issuer_cert" > "$issuer_bundle"
+fi
+
+if [[ ! -s "$issuer_bundle" ]]; then
+  printf 'issuer path did not contain any PEM certificates: %s\n' "$issuer_cert" >&2
+  exit 1
+fi
+
+if ! openssl crl2pkcs7 -nocrl -certfile "$issuer_bundle" \
   | openssl pkcs7 -print_certs -noout >/dev/null 2>&1; then
   printf 'issuer certificate bundle is not valid PEM certificate data: %s\n' "$issuer_cert" >&2
   exit 1
 fi
 
-if ! openssl verify -CAfile "$issuer_cert" "$subca_only" >/dev/null 2>&1; then
+if ! openssl verify -CAfile "$issuer_bundle" "$subca_only" >/dev/null 2>&1; then
   printf 'subCA certificate does not verify against issuer bundle.\n' >&2
   printf '  subCA:  %s\n' "$subca_cert" >&2
   printf '  issuer: %s\n' "$issuer_cert" >&2
@@ -127,7 +152,7 @@ fi
 {
   sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' "$subca_only"
   printf '\n'
-  sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' "$issuer_cert"
+  sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' "$issuer_bundle"
 } > "$chain_candidate"
 
 if [[ ! -s "$chain_candidate" ]]; then
