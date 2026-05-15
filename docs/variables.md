@@ -22,6 +22,8 @@ target is `rhel10`; prod/test runs select `openbao-prod` or `openbao-test` with
 - `openbao_tls_trust_source`
 - `openbao_manage_firewalld`
 - `openbao_manage_selinux`
+- `openbao_validate_known_user_vars`
+- `openbao_user_var_allowlist`
 
 DNS-only prod/test inventories do not need `openbao_nodes`; each host's
 `ansible_host` becomes `openbao_node_fqdn`:
@@ -77,6 +79,27 @@ Most low-level settings are in `group_vars/all/openbao_defaults.yml`, including:
 
 These are intended to be stable defaults. Override them only when the target
 environment requires it.
+
+## Variable Name Validation
+
+The role validates top-level `openbao_*` keys from the selected
+`group_vars/<target>/main.yml` and `group_vars/<target>/vault.yml` files before
+loading them into the run. This catches typos such as
+`openbao_node_bootstrap_tls_autodetct` instead of silently ignoring the value.
+
+```yaml
+openbao_validate_known_user_vars: true
+```
+
+If a local wrapper intentionally needs its own `openbao_*` variables, allow
+only those names:
+
+```yaml
+openbao_user_var_allowlist:
+  - openbao_local_wrapper_flag
+```
+
+Non-`openbao_*` variables are not checked by this guard.
 
 ## Certificate Modes
 

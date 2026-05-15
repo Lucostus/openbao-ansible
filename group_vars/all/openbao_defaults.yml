@@ -28,6 +28,7 @@ openbao_audit_log_raw: false
 
 openbao_public_fqdn: bao.example.com
 openbao_public_api_addr: "https://{{ openbao_public_fqdn }}"
+openbao_nodes: {}
 openbao_node_fqdn: >-
   {{
     (openbao_nodes | default({})).get(inventory_hostname, {}).get(
@@ -200,6 +201,14 @@ openbao_manage_firewalld: true
 openbao_manage_selinux: true
 openbao_enable_unauthenticated_metrics: false
 
+openbao_validate_known_user_vars: true
+openbao_known_external_vars:
+  - openbao_root_ca_cert_pem
+  - openbao_root_ca_key_pem
+  - openbao_static_unseal_key_b64
+  - openbao_site_vars_file
+  - openbao_secret_vars_file
+openbao_user_var_allowlist: []
 openbao_validate_bootstrap_inputs: true
 openbao_operator_token: ""
 openbao_static_seal_source: "{{ 'variable' if openbao_static_unseal_key_b64 is defined else 'generated_artifact' }}"

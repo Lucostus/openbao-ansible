@@ -1,4 +1,10 @@
 ---
+- name: Read OpenBao defaults for user variable validation
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir }}/../group_vars/all/openbao_defaults.yml"
+    name: openbao_common_default_vars
+  run_once: true
+
 - name: Load OpenBao defaults
   ansible.builtin.include_vars:
     file: "{{ playbook_dir }}/../group_vars/all/openbao_defaults.yml"
@@ -33,6 +39,49 @@
       {{ openbao_effective_target_group }}. Create
       {{ openbao_effective_site_vars_file }} or set openbao_site_vars_file.
 
+- name: Read OpenBao site variables for validation
+  ansible.builtin.include_vars:
+    file: "{{ openbao_effective_site_vars_file }}"
+    name: openbao_common_site_vars
+  run_once: true
+
+- name: Assert OpenBao site variables are known
+  ansible.builtin.assert:
+    that:
+      - openbao_common_unknown_site_vars | length == 0
+    fail_msg: >-
+      Unknown OpenBao variables in {{ openbao_effective_site_vars_file }}:
+      {{ openbao_common_unknown_site_vars | join(', ') }}. This usually means
+      a typo or a renamed variable. Fix the name, or add intentional local
+      extension variables to openbao_user_var_allowlist.
+  vars:
+    openbao_common_known_user_vars: >-
+      {{
+        (
+          openbao_common_default_vars.keys() | list
+          + openbao_known_external_vars
+          + openbao_user_var_allowlist
+          + (openbao_common_site_vars.openbao_user_var_allowlist | default([]))
+        )
+        | unique
+        | list
+      }}
+    openbao_common_unknown_site_vars: >-
+      {{
+        (
+          openbao_common_site_vars.keys()
+          | select('match', '^openbao_')
+          | list
+        )
+        | difference(openbao_common_known_user_vars)
+        | sort
+      }}
+  run_once: true
+  when: >-
+    openbao_common_site_vars.openbao_validate_known_user_vars
+    | default(openbao_validate_known_user_vars)
+    | bool
+
 - name: Load OpenBao site variables
   ansible.builtin.include_vars:
     file: "{{ openbao_effective_site_vars_file }}"
@@ -43,6 +92,49 @@
   delegate_to: localhost
   become: false
   register: openbao_common_loaded_vault_vars_stat
+
+- name: Read OpenBao vaulted variables for validation
+  ansible.builtin.include_vars:
+    file: "{{ openbao_effective_secret_vars_file }}"
+    name: openbao_common_vault_vars
+  no_log: true
+  run_once: true
+  when: openbao_common_loaded_vault_vars_stat.stat.exists
+
+- name: Assert OpenBao vaulted variables are known
+  ansible.builtin.assert:
+    that:
+      - openbao_common_unknown_vault_vars | length == 0
+    fail_msg: >-
+      Unknown OpenBao variables in {{ openbao_effective_secret_vars_file }}:
+      {{ openbao_common_unknown_vault_vars | join(', ') }}. This usually means
+      a typo or a renamed variable. Fix the name, or add intentional local
+      extension variables to openbao_user_var_allowlist.
+  vars:
+    openbao_common_known_user_vars: >-
+      {{
+        (
+          openbao_common_default_vars.keys() | list
+          + openbao_known_external_vars
+          + openbao_user_var_allowlist
+        )
+        | unique
+        | list
+      }}
+    openbao_common_unknown_vault_vars: >-
+      {{
+        (
+          openbao_common_vault_vars.keys()
+          | select('match', '^openbao_')
+          | list
+        )
+        | difference(openbao_common_known_user_vars)
+        | sort
+      }}
+  run_once: true
+  when:
+    - openbao_common_loaded_vault_vars_stat.stat.exists
+    - openbao_validate_known_user_vars | bool
 
 - name: Load OpenBao vaulted variables when present
   ansible.builtin.include_vars:
