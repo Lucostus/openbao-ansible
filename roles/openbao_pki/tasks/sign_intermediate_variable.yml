@@ -1,0 +1,85 @@
+---
+- name: Sign OpenBao intermediate CSR with variable root CA
+  block:
+    - name: Create temporary signing workspace on controller
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: openbao-pki
+      delegate_to: localhost
+      become: false
+      register: openbao_pki_tempdir
+      no_log: true
+
+    - name: Write temporary signing inputs on controller
+      ansible.builtin.copy:
+        content: "{{ item.content }}"
+        dest: "{{ openbao_pki_tempdir.path }}/{{ item.name }}"
+        mode: "0600"
+      loop:
+        - name: csr.pem
+          content: "{{ (openbao_intermediate_csr.stdout | from_json).data.csr }}"
+        - name: root-ca.pem
+          content: "{{ openbao_root_ca_cert_pem }}"
+        - name: root-ca.key
+          content: "{{ openbao_root_ca_key_pem }}"
+        - name: v3_intermediate.ext
+          content: |
+            [v3_intermediate_ca]
+            basicConstraints = critical,CA:true,pathlen:0
+            keyUsage = critical,digitalSignature,keyCertSign,cRLSign
+            subjectKeyIdentifier = hash
+            authorityKeyIdentifier = keyid,issuer
+      delegate_to: localhost
+      become: false
+      no_log: true
+
+    - name: Sign intermediate CSR with variable root CA
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - x509
+          - -req
+          - -in
+          - "{{ openbao_pki_tempdir.path }}/csr.pem"
+          - -CA
+          - "{{ openbao_pki_tempdir.path }}/root-ca.pem"
+          - -CAkey
+          - "{{ openbao_pki_tempdir.path }}/root-ca.key"
+          - -CAcreateserial
+          - -out
+          - "{{ openbao_pki_tempdir.path }}/intermediate.pem"
+          - -days
+          - "{{ openbao_pki_intermediate_days | string }}"
+          - -sha256
+          - -extfile
+          - "{{ openbao_pki_tempdir.path }}/v3_intermediate.ext"
+          - -extensions
+          - v3_intermediate_ca
+      delegate_to: localhost
+      become: false
+      register: openbao_variable_intermediate_sign
+      changed_when: true
+      failed_when: openbao_variable_intermediate_sign.rc != 0
+      no_log: true
+
+    - name: Read variable-signed intermediate certificate
+      ansible.builtin.slurp:
+        src: "{{ openbao_pki_tempdir.path }}/intermediate.pem"
+      delegate_to: localhost
+      become: false
+      register: openbao_signed_intermediate
+      no_log: true
+
+    - name: Set variable-signed intermediate bundle fact
+      ansible.builtin.set_fact:
+        openbao_signed_intermediate_bundle_content: "{{ openbao_signed_intermediate.content | b64decode }}"
+      no_log: true
+  always:
+    - name: Remove temporary signing workspace from controller
+      ansible.builtin.file:
+        path: "{{ openbao_pki_tempdir.path | default('/tmp/openbao-pki-missing') }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      no_log: true
+      when: openbao_pki_tempdir is defined

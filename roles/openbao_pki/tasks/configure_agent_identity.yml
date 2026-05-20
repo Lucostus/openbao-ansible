@@ -27,6 +27,7 @@
           'client_flag=false',
           'no_store=false',
           'generate_lease=true',
+          'issuer_ref=' ~ openbao_pki_issuer_name,
           'key_type=ec',
           'key_bits=256',
           'ttl=' ~ openbao_agent_identity_cert_ttl,

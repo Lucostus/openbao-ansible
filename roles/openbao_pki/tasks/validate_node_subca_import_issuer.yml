@@ -1,0 +1,37 @@
+---
+- name: Read selected node sub-CA certificate fingerprint
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -in
+      - "{{ hostvars[openbao_node_subca_pki_signer_host].openbao_node_subca_cert_file }}"
+      - -noout
+      - -sha256
+      - -fingerprint
+  delegate_to: "{{ openbao_node_subca_pki_signer_host }}"
+  register: openbao_node_subca_selected_cert_fingerprint
+  changed_when: false
+
+- name: Read existing OpenBao node sub-CA issuer fingerprint
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -noout
+      - -sha256
+      - -fingerprint
+    stdin: "{{ (openbao_pki_issuer_check.stdout | from_json).data.certificate }}"
+  delegate_to: "{{ openbao_pki_host }}"
+  register: openbao_pki_existing_issuer_fingerprint
+  changed_when: false
+
+- name: Assert existing OpenBao issuer matches selected node sub-CA
+  ansible.builtin.assert:
+    that:
+      - openbao_pki_existing_issuer_fingerprint.stdout == openbao_node_subca_selected_cert_fingerprint.stdout
+    fail_msg: >-
+      OpenBao issuer {{ openbao_pki_issuer_name }} already exists but does not
+      match {{ hostvars[openbao_node_subca_pki_signer_host].openbao_node_subca_cert_file }}
+      on {{ openbao_node_subca_pki_signer_host }}. Use a new
+      openbao_pki_issuer_name or rotate the issuer deliberately.

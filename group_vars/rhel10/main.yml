@@ -25,10 +25,13 @@ openbao_nodes:
 # openbao_node_bootstrap_tls_cert and openbao_node_bootstrap_tls_key. When no
 # real pair exists yet, Ansible generates temporary bootstrap certs under
 # ignored secure-artifacts/ and replaces them after the real files appear.
-# If a subordinate CA exists on one or all OpenBao nodes, operators can set
-# openbao_bootstrap_tls_missing_strategy=issue_from_node_subca and
-# openbao_pki_signing_source=node_subca to bootstrap and renew from that sub-CA
-# without copying its private key off the managed node. To replace an already
+# If a subordinate CA exists on one or all OpenBao nodes, operators can use it
+# for bootstrap listener certificates. For Agent renewal with a leaf-only
+# enterprise sub-CA, set openbao_pki_signing_source=node_subca_import and
+# openbao_node_subca_import_private_key_to_openbao=true; this imports the
+# actual sub-CA private key into OpenBao PKI storage. The older
+# openbao_pki_signing_source=node_subca mode signs an OpenBao intermediate and
+# requires the sub-CA path length to allow another CA. To replace an already
 # installed bootstrap listener cert/key, also set
 # openbao_bootstrap_tls_replace_existing=true and
 # openbao_node_bootstrap_tls_autodetect=false so old files are not used.

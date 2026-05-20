@@ -124,12 +124,14 @@
     )"
     test "${cert_hash}" = "${key_hash}"
     openssl x509 -in "${leaf}" -checkend "${OPENBAO_RENEW_BEFORE_SECONDS}" -noout
-    while IFS= read -r name; do
+    IFS=',' read -r -a expected_dns_names <<< "${OPENBAO_EXPECTED_DNS_NAMES}"
+    for name in "${expected_dns_names[@]}"; do
       test -z "${name}" || openssl x509 -in "${leaf}" -checkhost "${name}" -noout
-    done <<< "${OPENBAO_EXPECTED_DNS_NAMES}"
-    while IFS= read -r ip; do
+    done
+    IFS=',' read -r -a expected_ip_sans <<< "${OPENBAO_EXPECTED_IP_SANS}"
+    for ip in "${expected_ip_sans[@]}"; do
       test -z "${ip}" || openssl x509 -in "${leaf}" -checkip "${ip}" -noout
-    done <<< "${OPENBAO_EXPECTED_IP_SANS}"
+    done
   args:
     executable: /bin/bash
   environment:
@@ -141,13 +143,13 @@
       {{
         openbao_bootstrap_selfsigned_dns_subject_alt_names
         | map('regex_replace', '^DNS:', '')
-        | join('\n')
+        | join(',')
       }}
     OPENBAO_EXPECTED_IP_SANS: >-
       {{
         openbao_bootstrap_selfsigned_ip_subject_alt_names
         | map('regex_replace', '^IP:', '')
-        | join('\n')
+        | join(',')
       }}
   register: openbao_node_subca_bootstrap_current_check
   changed_when: false
@@ -155,11 +157,7 @@
 
 - name: Set node sub-CA bootstrap issue requirement
   ansible.builtin.set_fact:
-    openbao_node_subca_bootstrap_issue_needed: >-
-      {{
-        openbao_node_subca_bootstrap_current_check.rc != 0
-        or openbao_node_subca_bootstrap_csr_result is changed
-      }}
+    openbao_node_subca_bootstrap_issue_needed: "{{ (openbao_node_subca_bootstrap_current_check.rc | default(1) | int) != 0 or (openbao_node_subca_bootstrap_csr_result is changed) }}"
 
 - name: Issue local node sub-CA bootstrap listener certificate
   community.crypto.x509_certificate:

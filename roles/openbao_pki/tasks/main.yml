@@ -135,9 +135,25 @@
   no_log: true
   run_once: true
 
+- name: Validate existing node sub-CA import issuer
+  ansible.builtin.include_tasks: validate_node_subca_import_issuer.yml
+  when:
+    - openbao_pki_signing_source == 'node_subca_import'
+    - openbao_pki_issuer_check.rc == 0
+  run_once: true
+
 - name: Generate and import OpenBao intermediate CA
   ansible.builtin.include_tasks: sign_intermediate.yml
-  when: openbao_pki_issuer_check.rc != 0
+  when:
+    - openbao_pki_issuer_check.rc != 0
+    - openbao_pki_signing_source in ['variable', 'node_subca']
+  run_once: true
+
+- name: Import actual node sub-CA issuer into OpenBao
+  ansible.builtin.include_tasks: import_node_subca_issuer.yml
+  when:
+    - openbao_pki_issuer_check.rc != 0
+    - openbao_pki_signing_source == 'node_subca_import'
   run_once: true
 
 - name: Configure PKI issuing URLs
@@ -183,6 +199,7 @@
       - "server_flag=true"
       - "client_flag=false"
       - "no_store=false"
+      - "issuer_ref={{ openbao_pki_issuer_name }}"
       - "key_type=ec"
       - "key_bits=256"
       - "ttl={{ openbao_pki_leaf_ttl }}"

@@ -17,229 +17,71 @@
   no_log: true
 
 - name: Sign OpenBao intermediate CSR with variable root CA
+  ansible.builtin.include_tasks: sign_intermediate_variable.yml
   when: openbao_pki_signing_source == 'variable'
-  block:
-    - name: Create temporary signing workspace on controller
-      ansible.builtin.tempfile:
-        state: directory
-        suffix: openbao-pki
-      delegate_to: localhost
-      become: false
-      register: openbao_pki_tempdir
-      no_log: true
-
-    - name: Write temporary signing inputs on controller
-      ansible.builtin.copy:
-        content: "{{ item.content }}"
-        dest: "{{ openbao_pki_tempdir.path }}/{{ item.name }}"
-        mode: "0600"
-      loop:
-        - name: csr.pem
-          content: "{{ (openbao_intermediate_csr.stdout | from_json).data.csr }}"
-        - name: root-ca.pem
-          content: "{{ openbao_root_ca_cert_pem }}"
-        - name: root-ca.key
-          content: "{{ openbao_root_ca_key_pem }}"
-        - name: v3_intermediate.ext
-          content: |
-            [v3_intermediate_ca]
-            basicConstraints = critical,CA:true,pathlen:0
-            keyUsage = critical,digitalSignature,keyCertSign,cRLSign
-            subjectKeyIdentifier = hash
-            authorityKeyIdentifier = keyid,issuer
-      delegate_to: localhost
-      become: false
-      no_log: true
-
-    - name: Sign intermediate CSR with variable root CA
-      ansible.builtin.command:
-        argv:
-          - openssl
-          - x509
-          - -req
-          - -in
-          - "{{ openbao_pki_tempdir.path }}/csr.pem"
-          - -CA
-          - "{{ openbao_pki_tempdir.path }}/root-ca.pem"
-          - -CAkey
-          - "{{ openbao_pki_tempdir.path }}/root-ca.key"
-          - -CAcreateserial
-          - -out
-          - "{{ openbao_pki_tempdir.path }}/intermediate.pem"
-          - -days
-          - "{{ openbao_pki_intermediate_days | string }}"
-          - -sha256
-          - -extfile
-          - "{{ openbao_pki_tempdir.path }}/v3_intermediate.ext"
-          - -extensions
-          - v3_intermediate_ca
-      delegate_to: localhost
-      become: false
-      register: openbao_variable_intermediate_sign
-      changed_when: true
-      failed_when: openbao_variable_intermediate_sign.rc != 0
-      no_log: true
-
-    - name: Read variable-signed intermediate certificate
-      ansible.builtin.slurp:
-        src: "{{ openbao_pki_tempdir.path }}/intermediate.pem"
-      delegate_to: localhost
-      become: false
-      register: openbao_signed_intermediate
-      no_log: true
-
-    - name: Set variable-signed intermediate bundle fact
-      ansible.builtin.set_fact:
-        openbao_signed_intermediate_bundle_content: "{{ openbao_signed_intermediate.content | b64decode }}"
-      no_log: true
-
-    - name: Remove temporary signing workspace from controller
-      ansible.builtin.file:
-        path: "{{ openbao_pki_tempdir.path }}"
-        state: absent
-      delegate_to: localhost
-      become: false
-      no_log: true
 
 - name: Sign OpenBao intermediate CSR with node sub-CA
+  ansible.builtin.include_tasks: sign_intermediate_node_subca.yml
   when: openbao_pki_signing_source == 'node_subca'
+
+- name: Import signed OpenBao intermediate
   block:
-    - name: Assert node sub-CA PKI signer is resolved
+    - name: Assert signed intermediate bundle was produced
       ansible.builtin.assert:
         that:
-          - openbao_node_subca_pki_signer_host | length > 0
-          - openbao_node_subca_pki_signer_host in groups[openbao_cluster_group]
-          - openbao_node_subca_pki_signer_host in openbao_node_subca_available_hosts
-        fail_msg: "openbao_pki_signing_source=node_subca requires a resolved node sub-CA PKI signer host."
-
-    - name: Create temporary node sub-CA signing workspace
-      ansible.builtin.tempfile:
-        state: directory
-        suffix: openbao-pki-node-subca
-      delegate_to: "{{ openbao_node_subca_pki_signer_host }}"
-      register: openbao_node_subca_pki_tempdir
+          - openbao_signed_intermediate_bundle_content is defined
+          - "'BEGIN CERTIFICATE' in openbao_signed_intermediate_bundle_content"
+        fail_msg: "OpenBao intermediate signing did not produce a PEM certificate bundle."
       no_log: true
 
-    - name: Write node sub-CA signing inputs
+    - name: Copy signed intermediate certificate to PKI host
       ansible.builtin.copy:
-        content: "{{ item.content }}"
-        dest: "{{ openbao_node_subca_pki_tempdir.path }}/{{ item.name }}"
+        content: "{{ openbao_signed_intermediate_bundle_content }}"
+        dest: /tmp/openbao-intermediate.pem
         owner: root
         group: root
         mode: "0600"
-      loop:
-        - name: csr.pem
-          content: "{{ (openbao_intermediate_csr.stdout | from_json).data.csr }}"
-        - name: v3_intermediate.ext
-          content: |
-            [v3_intermediate_ca]
-            basicConstraints = critical,CA:true,pathlen:0
-            keyUsage = critical,digitalSignature,keyCertSign,cRLSign
-            subjectKeyIdentifier = hash
-            authorityKeyIdentifier = keyid,issuer
-      delegate_to: "{{ openbao_node_subca_pki_signer_host }}"
+      delegate_to: "{{ openbao_pki_host }}"
       no_log: true
 
-    - name: Sign intermediate CSR with node sub-CA
+    - name: Import signed intermediate into OpenBao
       ansible.builtin.command:
         argv:
-          - openssl
-          - x509
-          - -req
-          - -in
-          - "{{ openbao_node_subca_pki_tempdir.path }}/csr.pem"
-          - -CA
-          - "{{ hostvars[openbao_node_subca_pki_signer_host].openbao_node_subca_cert_file }}"
-          - -CAkey
-          - "{{ hostvars[openbao_node_subca_pki_signer_host].openbao_node_subca_key_file }}"
-          - -CAcreateserial
-          - -out
-          - "{{ openbao_node_subca_pki_tempdir.path }}/intermediate.pem"
-          - -days
-          - "{{ openbao_pki_intermediate_days | string }}"
-          - -sha256
-          - -extfile
-          - "{{ openbao_node_subca_pki_tempdir.path }}/v3_intermediate.ext"
-          - -extensions
-          - v3_intermediate_ca
-      delegate_to: "{{ openbao_node_subca_pki_signer_host }}"
-      register: openbao_node_subca_intermediate_sign
-      changed_when: true
-      failed_when: openbao_node_subca_intermediate_sign.rc != 0
-
-    - name: Read node sub-CA-signed intermediate certificate
-      ansible.builtin.slurp:
-        src: "{{ openbao_node_subca_pki_tempdir.path }}/intermediate.pem"
-      delegate_to: "{{ openbao_node_subca_pki_signer_host }}"
-      register: openbao_node_subca_signed_intermediate
-
-    - name: Read node sub-CA signing chain
-      ansible.builtin.slurp:
-        src: "{{ hostvars[openbao_node_subca_pki_signer_host].openbao_node_subca_chain_file }}"
-      delegate_to: "{{ openbao_node_subca_pki_signer_host }}"
-      register: openbao_node_subca_pki_chain
-
-    - name: Set node sub-CA-signed intermediate bundle fact
-      ansible.builtin.set_fact:
-        openbao_signed_intermediate_bundle_content: |
-          {{ openbao_node_subca_signed_intermediate.content | b64decode | trim }}
-          {{ openbao_node_subca_pki_chain.content | b64decode | trim }}
-
-    - name: Remove temporary node sub-CA signing workspace
-      ansible.builtin.file:
-        path: "{{ openbao_node_subca_pki_tempdir.path }}"
-        state: absent
-      delegate_to: "{{ openbao_node_subca_pki_signer_host }}"
+          - bao
+          - write
+          - -format=json
+          - "{{ openbao_pki_mount }}/intermediate/set-signed"
+          - "certificate=@/tmp/openbao-intermediate.pem"
+      environment: "{{ openbao_pki_environment }}"
+      delegate_to: "{{ openbao_pki_host }}"
+      register: openbao_import_signed_intermediate
+      changed_when: openbao_import_signed_intermediate.rc == 0
+      failed_when: openbao_import_signed_intermediate.rc != 0
+      retries: 12
+      delay: 5
+      until: openbao_import_signed_intermediate.rc == 0
       no_log: true
 
-- name: Copy signed intermediate certificate to PKI host
-  ansible.builtin.copy:
-    content: "{{ openbao_signed_intermediate_bundle_content }}"
-    dest: /tmp/openbao-intermediate.pem
-    owner: root
-    group: root
-    mode: "0600"
-  delegate_to: "{{ openbao_pki_host }}"
-  no_log: true
-
-- name: Import signed intermediate into OpenBao
-  ansible.builtin.command:
-    argv:
-      - bao
-      - write
-      - -format=json
-      - "{{ openbao_pki_mount }}/intermediate/set-signed"
-      - "certificate=@/tmp/openbao-intermediate.pem"
-  environment: "{{ openbao_pki_environment }}"
-  delegate_to: "{{ openbao_pki_host }}"
-  register: openbao_import_signed_intermediate
-  changed_when: openbao_import_signed_intermediate.rc == 0
-  failed_when: openbao_import_signed_intermediate.rc != 0
-  retries: 12
-  delay: 5
-  until: openbao_import_signed_intermediate.rc == 0
-  no_log: true
-
-- name: Name default OpenBao intermediate issuer
-  ansible.builtin.command:
-    argv:
-      - bao
-      - write
-      - "{{ openbao_pki_mount }}/issuer/default"
-      - "issuer_name={{ openbao_pki_issuer_name }}"
-  environment: "{{ openbao_pki_environment }}"
-  delegate_to: "{{ openbao_pki_host }}"
-  register: openbao_name_default_intermediate_issuer
-  changed_when: openbao_name_default_intermediate_issuer.rc == 0
-  failed_when: openbao_name_default_intermediate_issuer.rc != 0
-  retries: 12
-  delay: 5
-  until: openbao_name_default_intermediate_issuer.rc == 0
-  no_log: true
-
-- name: Remove temporary signed intermediate from PKI host
-  ansible.builtin.file:
-    path: /tmp/openbao-intermediate.pem
-    state: absent
-  delegate_to: "{{ openbao_pki_host }}"
-  no_log: true
+    - name: Name default OpenBao intermediate issuer
+      ansible.builtin.command:
+        argv:
+          - bao
+          - write
+          - "{{ openbao_pki_mount }}/issuer/default"
+          - "issuer_name={{ openbao_pki_issuer_name }}"
+      environment: "{{ openbao_pki_environment }}"
+      delegate_to: "{{ openbao_pki_host }}"
+      register: openbao_name_default_intermediate_issuer
+      changed_when: openbao_name_default_intermediate_issuer.rc == 0
+      failed_when: openbao_name_default_intermediate_issuer.rc != 0
+      retries: 12
+      delay: 5
+      until: openbao_name_default_intermediate_issuer.rc == 0
+      no_log: true
+  always:
+    - name: Remove temporary signed intermediate from PKI host
+      ansible.builtin.file:
+        path: /tmp/openbao-intermediate.pem
+        state: absent
+      delegate_to: "{{ openbao_pki_host }}"
+      no_log: true

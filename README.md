@@ -35,9 +35,10 @@ openbao_certificate_mode: agent
 Before enabling Agent renewal, add a PKI signing source. The default signing
 source is `openbao_root_ca_cert_pem` and `openbao_root_ca_key_pem` in an
 encrypted environment vault. Environments with a subordinate CA already on one
-or all OpenBao nodes can instead use `openbao_pki_signing_source=node_subca`.
-Then rerun. Use `--ask-vault-pass` only when encrypted vault variables are
-needed:
+or all OpenBao nodes can instead use `openbao_pki_signing_source=node_subca_import`
+to import the actual sub-CA into OpenBao, or `node_subca` when that sub-CA is
+allowed to sign another intermediate CA. Then rerun. Use `--ask-vault-pass`
+only when encrypted vault variables are needed:
 
 ```bash
 ansible-playbook playbooks/site.yml --ask-vault-pass
@@ -90,7 +91,7 @@ cp group_vars/rhel10/vault.yml.example group_vars/openbao-prod/vault.yml
 ansible-vault encrypt group_vars/openbao-prod/vault.yml
 ```
 
-Vaulted PKI values for renewal modes:
+Vaulted PKI values for variable-based renewal modes:
 
 - `openbao_root_ca_cert_pem`: root CA certificate.
 - `openbao_root_ca_key_pem`: root CA key for signing the OpenBao intermediate.
@@ -112,15 +113,17 @@ paths, rerun `playbooks/site.yml`; the playbook replaces the generated listener
 certs and validates against the configured trust source again. A partial real
 pair, such as a cert without its key, fails instead of falling back.
 
-If one node, or every node, has a subordinate CA at `/etc/openbao-subca/`, use
-node-subCA bootstrap and PKI signing:
+If one node, or every node, has a leaf-issuing subordinate CA at
+`/etc/openbao-subca/`, use node-subCA bootstrap and import the actual sub-CA
+into OpenBao for Agent renewal:
 
 ```yaml
 openbao_certificate_mode: agent
 openbao_bootstrap_tls_source: node
 openbao_bootstrap_tls_missing_strategy: issue_from_node_subca
 openbao_bootstrap_tls_replace_existing: true
-openbao_pki_signing_source: node_subca
+openbao_pki_signing_source: node_subca_import
+openbao_node_subca_import_private_key_to_openbao: true
 openbao_node_subca_topology: auto
 openbao_node_bootstrap_tls_autodetect: false
 openbao_node_subca_chain_file: /etc/openbao-subca/subca-chain.pem
@@ -128,16 +131,21 @@ openbao_node_subca_chain_issuer_path: /etc/pki/ca-trust/source/anchors
 ```
 
 With one complete sub-CA host, that host signs bootstrap CSRs for the cluster.
-With complete sub-CA material on all three hosts, each node signs locally.
-Private sub-CA keys are never copied to the controller or to other nodes. Use a
-chain file containing the sub-CA and its issuer chain when the sub-CA is not a
-self-signed trust anchor. `openbao_bootstrap_tls_replace_existing=true` is only
-needed when replacing an already-installed listener cert/key pair, and the
-disabled bootstrap TLS auto-detection prevents old node certs from being used
-instead of issuing from the sub-CA. When
-`openbao_node_subca_chain_issuer_path` points at a PEM issuer/root file or a
-directory such as `/etc/pki/ca-trust/source/anchors`, Ansible builds
-`openbao_node_subca_chain_file` on the sub-CA host before topology detection.
+With complete sub-CA material on all three hosts, each node signs bootstrap
+certificates locally. In `node_subca_import` mode the selected sub-CA private
+key is sent over TLS to OpenBao and stored in OpenBao PKI storage; it is not
+copied to the controller or to other nodes as a file. Use
+`openbao_pki_signing_source=node_subca` only when the sub-CA is allowed to sign
+an OpenBao intermediate CA. Use a chain file containing the sub-CA and its
+issuer chain when the sub-CA is not a self-signed trust anchor.
+`openbao_bootstrap_tls_replace_existing=true` is only needed when replacing an
+already-installed listener cert/key pair, and the disabled bootstrap TLS
+auto-detection prevents old node certs from being used instead of issuing from
+the sub-CA. When `openbao_node_subca_chain_issuer_path` points at a PEM
+issuer/root file or a directory such as `/etc/pki/ca-trust/source/anchors`,
+Ansible builds `openbao_node_subca_chain_file` on the sub-CA host before
+topology detection. Root/issuer chain files are trust material only; they are
+not imported as extra OpenBao PKI issuers.
 
 For offline preparation or manual troubleshooting, the same public chain can be
 built on the signer node with:

@@ -10,7 +10,8 @@
 # Production best practice is an offline root CA. These values are required only
 # when enabling OpenBao Agent or native listener ACME renewal with the
 # variable-based PKI signing source. They are not required when using
-# openbao_pki_signing_source=node_subca and node-hosted subordinate CA material.
+# node-hosted subordinate CA material with openbao_pki_signing_source=node_subca
+# or openbao_pki_signing_source=node_subca_import.
 openbao_root_ca_cert_pem: |
   -----BEGIN CERTIFICATE-----
   REPLACE_WITH_ROOT_CA_CERTIFICATE

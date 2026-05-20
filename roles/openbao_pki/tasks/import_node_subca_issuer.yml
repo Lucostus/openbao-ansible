@@ -1,0 +1,176 @@
+---
+- name: Assert node sub-CA import signer is resolved
+  ansible.builtin.assert:
+    that:
+      - openbao_node_subca_pki_signer_host | length > 0
+      - openbao_node_subca_pki_signer_host in groups[openbao_cluster_group]
+      - openbao_node_subca_pki_signer_host in openbao_node_subca_available_hosts
+    fail_msg: "openbao_pki_signing_source=node_subca_import requires a resolved node sub-CA PKI signer host."
+
+- name: Validate node sub-CA import material on signer
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cert_file="${OPENBAO_NODE_SUBCA_CERT_FILE}"
+    key_file="${OPENBAO_NODE_SUBCA_KEY_FILE}"
+
+    openssl x509 -in "${cert_file}" -noout >/dev/null
+
+    key_error="$(mktemp)"
+    trap 'rm -f "${key_error}"' EXIT
+    if ! timeout 10 openssl pkey -in "${key_file}" -noout > /dev/null 2>"${key_error}" < /dev/null; then
+      if grep -qiE 'pass phrase|passphrase|password|encrypted' "${key_error}"; then
+        echo "OpenBao PKI import requires an unencrypted PEM private key or prior decryption on the signer host." >&2
+      else
+        cat "${key_error}" >&2
+      fi
+      exit 1
+    fi
+
+    if ! openssl x509 -in "${cert_file}" -noout -text \
+        | awk '/Basic Constraints/{flag=1} flag && /CA:TRUE/{found=1} flag && /^[[:space:]]*X509v3/ && !/Basic Constraints/{flag=0} END{exit found ? 0 : 1}'; then
+      echo "Node sub-CA certificate ${cert_file} must be a CA certificate with CA:TRUE." >&2
+      exit 1
+    fi
+
+    cert_hash="$(
+      openssl x509 -in "${cert_file}" -pubkey -noout \
+        | openssl pkey -pubin -outform DER \
+        | openssl dgst -sha256 -binary \
+        | openssl base64 -A
+    )"
+    key_hash="$(
+      openssl pkey -in "${key_file}" -pubout -outform DER \
+        | openssl dgst -sha256 -binary \
+        | openssl base64 -A
+    )"
+    if test "${cert_hash}" != "${key_hash}"; then
+      echo "Node sub-CA certificate and private key do not match on ${OPENBAO_NODE_SUBCA_SIGNER_HOST}." >&2
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  environment:
+    OPENBAO_NODE_SUBCA_CERT_FILE: "{{ hostvars[openbao_node_subca_pki_signer_host].openbao_node_subca_cert_file }}"
+    OPENBAO_NODE_SUBCA_KEY_FILE: "{{ hostvars[openbao_node_subca_pki_signer_host].openbao_node_subca_key_file }}"
+    OPENBAO_NODE_SUBCA_SIGNER_HOST: "{{ openbao_node_subca_pki_signer_host }}"
+  delegate_to: "{{ openbao_node_subca_pki_signer_host }}"
+  register: openbao_node_subca_import_material_check
+  changed_when: false
+  failed_when: openbao_node_subca_import_material_check.rc != 0
+
+- name: Import node sub-CA issuer into OpenBao
+  block:
+    - name: Create temporary node sub-CA import workspace
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: openbao-pki-node-subca-import
+      delegate_to: "{{ openbao_node_subca_pki_signer_host }}"
+      register: openbao_node_subca_import_tempdir
+      no_log: true
+
+    - name: Build temporary node sub-CA import bundle
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        cat "${OPENBAO_NODE_SUBCA_KEY_FILE}" "${OPENBAO_NODE_SUBCA_CERT_FILE}" > "${OPENBAO_NODE_SUBCA_IMPORT_BUNDLE}"
+      args:
+        executable: /bin/bash
+      environment:
+        OPENBAO_NODE_SUBCA_CERT_FILE: "{{ hostvars[openbao_node_subca_pki_signer_host].openbao_node_subca_cert_file }}"
+        OPENBAO_NODE_SUBCA_KEY_FILE: "{{ hostvars[openbao_node_subca_pki_signer_host].openbao_node_subca_key_file }}"
+        OPENBAO_NODE_SUBCA_IMPORT_BUNDLE: "{{ openbao_node_subca_import_tempdir.path }}/subca-import.pem"
+      delegate_to: "{{ openbao_node_subca_pki_signer_host }}"
+      changed_when: false
+      no_log: true
+
+    - name: Import node sub-CA certificate and key into OpenBao PKI
+      ansible.builtin.command:
+        argv:
+          - bao
+          - write
+          - -format=json
+          - "{{ openbao_pki_mount }}/issuers/import/bundle"
+          - "pem_bundle=@{{ openbao_node_subca_import_tempdir.path }}/subca-import.pem"
+      environment: "{{ openbao_pki_environment }}"
+      delegate_to: "{{ openbao_node_subca_pki_signer_host }}"
+      register: openbao_node_subca_import_result
+      changed_when: >-
+        openbao_node_subca_import_result.rc == 0
+        and (
+          (
+            (openbao_node_subca_import_result.stdout | from_json).data.imported_issuers | default([], true)
+          ) | length > 0
+          or (
+            (openbao_node_subca_import_result.stdout | from_json).data.imported_keys | default([], true)
+          ) | length > 0
+        )
+      failed_when: openbao_node_subca_import_result.rc != 0
+      no_log: true
+
+    - name: Resolve imported node sub-CA issuer ID
+      ansible.builtin.set_fact:
+        openbao_node_subca_import_issuer_ids: >-
+          {{
+            (
+              (
+                (openbao_node_subca_import_result.stdout | from_json).data.imported_issuers | default([], true)
+              )
+              + (
+                (openbao_node_subca_import_result.stdout | from_json).data.existing_issuers | default([], true)
+              )
+            )
+            | unique
+            | list
+          }}
+      no_log: true
+
+    - name: Assert exactly one node sub-CA issuer was imported or reused
+      ansible.builtin.assert:
+        that:
+          - openbao_node_subca_import_issuer_ids | length == 1
+        fail_msg: >-
+          Expected exactly one imported or existing OpenBao issuer for the node
+          sub-CA import, found {{ openbao_node_subca_import_issuer_ids | length }}.
+
+    - name: Set imported node sub-CA issuer ID fact
+      ansible.builtin.set_fact:
+        openbao_node_subca_import_issuer_id: "{{ openbao_node_subca_import_issuer_ids | first }}"
+      no_log: true
+
+    - name: Name imported node sub-CA issuer
+      ansible.builtin.command:
+        argv:
+          - bao
+          - write
+          - "{{ openbao_pki_mount }}/issuer/{{ openbao_node_subca_import_issuer_id }}"
+          - "issuer_name={{ openbao_pki_issuer_name }}"
+          - leaf_not_after_behavior=truncate
+          - usage=read-only,issuing-certificates,crl-signing
+      environment: "{{ openbao_pki_environment }}"
+      delegate_to: "{{ openbao_pki_host }}"
+      register: openbao_node_subca_name_imported_issuer
+      changed_when: false
+      failed_when: openbao_node_subca_name_imported_issuer.rc != 0
+      no_log: true
+
+    - name: Set imported node sub-CA issuer as default
+      ansible.builtin.command:
+        argv:
+          - bao
+          - write
+          - "{{ openbao_pki_mount }}/config/issuers"
+          - "default={{ openbao_pki_issuer_name }}"
+      environment: "{{ openbao_pki_environment }}"
+      delegate_to: "{{ openbao_pki_host }}"
+      register: openbao_node_subca_default_imported_issuer
+      changed_when: false
+      failed_when: openbao_node_subca_default_imported_issuer.rc != 0
+      no_log: true
+  always:
+    - name: Remove temporary node sub-CA import workspace
+      ansible.builtin.file:
+        path: "{{ openbao_node_subca_import_tempdir.path | default('/tmp/openbao-node-subca-import-missing') }}"
+        state: absent
+      delegate_to: "{{ openbao_node_subca_pki_signer_host }}"
+      no_log: true
+      when: openbao_node_subca_import_tempdir is defined

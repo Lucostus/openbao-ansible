@@ -41,7 +41,8 @@ Agent AppRole artifacts under `secure-artifacts/lab/openbao/`, starts
 `openbao-agent`, and validates Agent-issued listener certificates for
 `bao.lab.local` and each node FQDN.
 
-Node sub-CA bootstrap and PKI signing with one signer:
+Node sub-CA bootstrap and Agent renewal with the actual sub-CA imported into
+OpenBao:
 
 ```bash
 lab/scripts/openbao-lab-reset.sh --all --build
@@ -52,13 +53,20 @@ lab/scripts/openbao-lab-playbook.sh site \
   -e openbao_certificate_mode=agent \
   -e openbao_bootstrap_tls_source=node \
   -e openbao_bootstrap_tls_missing_strategy=issue_from_node_subca \
-  -e openbao_pki_signing_source=node_subca \
+  -e openbao_pki_signing_source=node_subca_import \
+  -e openbao_node_subca_import_private_key_to_openbao=true \
   -e openbao_node_subca_chain_file=/etc/openbao-subca/subca-chain-built.pem \
   -e openbao_node_subca_chain_issuer_path=/etc/pki/ca-trust/source/anchors
 curl --resolve bao.lab.local:8443:127.0.0.1 \
   --cacert secure-artifacts/lab/subca/subca-chain.pem \
   https://bao.lab.local:8443/v1/sys/health
 ```
+
+This mode is for a sub-CA that can issue leaf certificates but cannot issue
+another CA. OpenBao Agent-issued listener certificates are signed directly by
+the imported actual sub-CA. The private key is sent from the selected signer
+host to OpenBao over TLS and stored in OpenBao PKI storage; it is not copied to
+the controller or to other nodes as a file.
 
 All-node sub-CA bootstrap uses the same extra vars after installing the lab
 sub-CA on every node:

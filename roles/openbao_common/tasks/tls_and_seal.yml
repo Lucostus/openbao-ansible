@@ -235,6 +235,7 @@
   when:
     - openbao_bootstrap_tls_install_needed | bool
     - openbao_bootstrap_tls_effective_source | default('') == 'generated_node_subca'
+    - openbao_node_subca_bootstrap_issue_needed | default(true) | bool
 
 - name: Install node sub-CA bootstrap OpenBao listener private key
   ansible.builtin.copy:
@@ -249,6 +250,7 @@
   when:
     - openbao_bootstrap_tls_install_needed | bool
     - openbao_bootstrap_tls_effective_source | default('') == 'generated_node_subca'
+    - openbao_node_subca_bootstrap_issue_needed | default(true) | bool
 
 - name: Install controller bootstrap OpenBao listener certificate
   ansible.builtin.copy:

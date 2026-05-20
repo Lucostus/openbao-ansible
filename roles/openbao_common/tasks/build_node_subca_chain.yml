@@ -62,6 +62,35 @@
       sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' "$1"
     }
 
+    normalize_pem_bundle() {
+      local source_file="$1"
+      local output_file="$2"
+      local split_dir
+      split_dir="$(mktemp -d "${tmpdir}/normalize.XXXXXX")"
+
+      awk -v dir="${split_dir}" '
+        /-----BEGIN CERTIFICATE-----/ {
+          cert_index++
+          cert_file = sprintf("%s/cert-%04d.pem", dir, cert_index)
+          in_cert = 1
+        }
+        in_cert { print > cert_file }
+        /-----END CERTIFICATE-----/ && in_cert {
+          close(cert_file)
+          in_cert = 0
+        }
+      ' "${source_file}"
+
+      : > "${output_file}"
+      while IFS= read -r -d '' cert_file; do
+        openssl x509 -in "${cert_file}" -outform PEM >> "${output_file}"
+        printf '\n' >> "${output_file}"
+      done < <(
+        find "${split_dir}" -maxdepth 1 -type f -name 'cert-*.pem' -print0 \
+          | sort -z
+      )
+    }
+
     extract_first_cert "${OPENBAO_NODE_SUBCA_CERT_FILE}" > "${subca_only}"
     if [[ ! -s "${subca_only}" ]]; then
       printf 'subCA certificate did not contain a PEM certificate: %s\n' \
@@ -124,21 +153,34 @@
       printf '\n'
       extract_all_certs "${issuer_bundle}"
     } > "${chain_candidate}"
+    normalized_candidate="${tmpdir}/chain.normalized.pem"
+    normalized_current="${tmpdir}/current.normalized.pem"
+    normalize_pem_bundle "${chain_candidate}" "${normalized_candidate}"
 
     out_dir="$(dirname "${OPENBAO_NODE_SUBCA_CHAIN_FILE}")"
     if [[ ! -d "${out_dir}" ]]; then
       install -d -m 0755 "${out_dir}"
     fi
 
+    if [[ -f "${OPENBAO_NODE_SUBCA_CHAIN_FILE}" ]]; then
+      normalize_pem_bundle "${OPENBAO_NODE_SUBCA_CHAIN_FILE}" "${normalized_current}"
+    fi
+
+    candidate_hash="$(sha256sum "${normalized_candidate}" | awk '{ print $1 }')"
+    current_hash=""
+    if [[ -f "${OPENBAO_NODE_SUBCA_CHAIN_FILE}" ]]; then
+      current_hash="$(sha256sum "${normalized_current}" | awk '{ print $1 }')"
+    fi
+
     if [[ -f "${OPENBAO_NODE_SUBCA_CHAIN_FILE}" ]] \
-      && cmp -s "${chain_candidate}" "${OPENBAO_NODE_SUBCA_CHAIN_FILE}"; then
+      && [[ "${candidate_hash}" == "${current_hash}" ]]; then
       printf 'openbao-node-subca-chain-current\n'
     else
       install \
         -m "${OPENBAO_NODE_SUBCA_CHAIN_MODE}" \
         -o "${OPENBAO_NODE_SUBCA_CHAIN_OWNER}" \
         -g "${OPENBAO_NODE_SUBCA_CHAIN_GROUP}" \
-        "${chain_candidate}" \
+        "${normalized_candidate}" \
         "${OPENBAO_NODE_SUBCA_CHAIN_FILE}"
       printf 'openbao-node-subca-chain-changed\n'
     fi

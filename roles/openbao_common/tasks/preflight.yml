@@ -15,7 +15,7 @@
       - openbao_bootstrap_tls_source != 'node' or openbao_certificate_mode in ['agent', 'bootstrap']
       - openbao_static_seal_source in ['generated_artifact', 'variable']
       - openbao_tls_trust_source in ['system', 'variable', 'file', 'node_subca']
-      - openbao_pki_signing_source in ['variable', 'node_subca']
+      - openbao_pki_signing_source in ['variable', 'node_subca', 'node_subca_import']
       - openbao_node_subca_topology in ['auto', 'single_signer', 'every_node']
       - not (openbao_agent_enabled | bool) or openbao_pki_enabled | bool
       - not (openbao_native_acme_enabled | bool) or openbao_pki_enabled | bool
@@ -56,8 +56,21 @@
     fail_msg: "Node sub-CA signing is selected, but the signer topology was not resolved cleanly."
   when:
     - openbao_bootstrap_tls_missing_strategy == 'issue_from_node_subca'
-      or openbao_pki_signing_source == 'node_subca'
+      or openbao_pki_signing_source in ['node_subca', 'node_subca_import']
       or openbao_tls_trust_source == 'node_subca'
+
+- name: Assert node sub-CA import acknowledgement
+  ansible.builtin.assert:
+    that:
+      - openbao_node_subca_import_private_key_to_openbao | bool
+    fail_msg: >-
+      openbao_pki_signing_source=node_subca_import imports the actual node
+      sub-CA private key into OpenBao PKI storage. Set
+      openbao_node_subca_import_private_key_to_openbao=true to acknowledge
+      this key handling model.
+  when:
+    - openbao_pki_enabled | bool
+    - openbao_pki_signing_source == 'node_subca_import'
 
 - name: Assert advertised OpenBao addresses match the TLS listener
   ansible.builtin.assert:

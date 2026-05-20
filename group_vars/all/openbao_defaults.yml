@@ -115,7 +115,7 @@ openbao_tls_trust_source: >-
     'node_subca'
     if (
       openbao_bootstrap_tls_missing_strategy == 'issue_from_node_subca'
-      or openbao_pki_signing_source == 'node_subca'
+      or openbao_pki_signing_source in ['node_subca', 'node_subca_import']
     )
     else 'variable'
     if openbao_root_ca_cert_pem is defined
@@ -229,6 +229,7 @@ openbao_static_unseal_key_artifact: "{{ openbao_secure_artifacts_dir }}/static-u
 
 openbao_pki_enabled: "{{ openbao_certificate_mode in ['agent', 'native_acme'] }}"
 openbao_pki_signing_source: variable
+openbao_node_subca_import_private_key_to_openbao: false
 openbao_pki_mount: pki_openbao
 openbao_pki_intermediate_common_name: OpenBao Listener Intermediate CA
 openbao_pki_issuer_name: openbao-listener-intermediate
