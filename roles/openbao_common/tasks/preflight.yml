@@ -29,6 +29,9 @@
       - openbao_node_subca_cert_file is match('^/')
       - openbao_node_subca_key_file is match('^/')
       - openbao_node_subca_chain_file is match('^/')
+      - not (openbao_node_subca_chain_build_enabled | bool) or openbao_node_subca_chain_issuer_path is match('^/')
+      - not (openbao_node_subca_chain_build_enabled | bool) or openbao_node_subca_chain_file != openbao_node_subca_cert_file
+      - openbao_node_subca_chain_mode is match('^0?[0-7]{3,4}$')
       - openbao_node_subca_bootstrap_artifact_dir is match('^/')
       - openbao_node_subca_bootstrap_key_file is match('^/')
       - openbao_node_subca_bootstrap_csr_file is match('^/')

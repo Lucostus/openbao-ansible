@@ -32,6 +32,9 @@ openbao_nodes:
 # installed bootstrap listener cert/key, also set
 # openbao_bootstrap_tls_replace_existing=true and
 # openbao_node_bootstrap_tls_autodetect=false so old files are not used.
+# If the sub-CA is issued by a root/intermediate in a local trust directory,
+# set openbao_node_subca_chain_issuer_path to that PEM file or directory and
+# openbao_node_subca_chain_file to the public chain file Ansible should build.
 openbao_certificate_mode: bootstrap
 openbao_bootstrap_tls_source: node
 openbao_node_bootstrap_tls_dir: /usr/local/lib/cockpitcert

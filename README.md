@@ -124,6 +124,7 @@ openbao_pki_signing_source: node_subca
 openbao_node_subca_topology: auto
 openbao_node_bootstrap_tls_autodetect: false
 openbao_node_subca_chain_file: /etc/openbao-subca/subca-chain.pem
+openbao_node_subca_chain_issuer_path: /etc/pki/ca-trust/source/anchors
 ```
 
 With one complete sub-CA host, that host signs bootstrap CSRs for the cluster.
@@ -133,9 +134,13 @@ chain file containing the sub-CA and its issuer chain when the sub-CA is not a
 self-signed trust anchor. `openbao_bootstrap_tls_replace_existing=true` is only
 needed when replacing an already-installed listener cert/key pair, and the
 disabled bootstrap TLS auto-detection prevents old node certs from being used
-instead of issuing from the sub-CA.
+instead of issuing from the sub-CA. When
+`openbao_node_subca_chain_issuer_path` points at a PEM issuer/root file or a
+directory such as `/etc/pki/ca-trust/source/anchors`, Ansible builds
+`openbao_node_subca_chain_file` on the sub-CA host before topology detection.
 
-To build the public chain file on the signer node:
+For offline preparation or manual troubleshooting, the same public chain can be
+built on the signer node with:
 
 ```bash
 sudo scripts/openbao-build-subca-chain.sh \

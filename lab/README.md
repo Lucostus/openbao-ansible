@@ -53,7 +53,8 @@ lab/scripts/openbao-lab-playbook.sh site \
   -e openbao_bootstrap_tls_source=node \
   -e openbao_bootstrap_tls_missing_strategy=issue_from_node_subca \
   -e openbao_pki_signing_source=node_subca \
-  -e openbao_node_subca_chain_file=/etc/openbao-subca/subca-chain.pem
+  -e openbao_node_subca_chain_file=/etc/openbao-subca/subca-chain-built.pem \
+  -e openbao_node_subca_chain_issuer_path=/etc/pki/ca-trust/source/anchors
 curl --resolve bao.lab.local:8443:127.0.0.1 \
   --cacert secure-artifacts/lab/subca/subca-chain.pem \
   https://bao.lab.local:8443/v1/sys/health

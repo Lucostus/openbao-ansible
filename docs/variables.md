@@ -194,6 +194,8 @@ Default node sub-CA paths:
 openbao_node_subca_cert_file: /etc/openbao-subca/subca.pem
 openbao_node_subca_key_file: /etc/openbao-subca/subca.key.pem
 openbao_node_subca_chain_file: "{{ openbao_node_subca_cert_file }}"
+openbao_node_subca_chain_issuer_path: ""
+openbao_node_subca_chain_build_enabled: "{{ openbao_node_subca_chain_issuer_path | length > 0 }}"
 ```
 
 When the subordinate CA is issued by another CA, point
@@ -204,8 +206,15 @@ If `openbao_pki_signing_source=node_subca` is used, the node sub-CA must also
 be allowed to sign an OpenBao intermediate CA, so its CA path length constraint
 must permit at least one subordinate CA below it.
 
-The repository includes a helper for building that public chain file on the
-signer node:
+If `openbao_node_subca_chain_issuer_path` is set to a PEM issuer/root file or a
+directory containing PEM issuer/root certificates, Ansible builds
+`openbao_node_subca_chain_file` on each node that has the sub-CA certificate.
+When a directory is provided, all PEM certificates in that directory are
+included after the sub-CA certificate; the sub-CA certificate is verified
+against that issuer bundle before the chain file is accepted.
+
+The repository also includes a helper for building the same public chain file
+manually on the signer node:
 
 ```bash
 sudo scripts/openbao-build-subca-chain.sh \
