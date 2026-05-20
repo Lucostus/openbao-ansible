@@ -138,14 +138,20 @@ copied to the controller or to other nodes as a file. Use
 `openbao_pki_signing_source=node_subca` only when the sub-CA is allowed to sign
 an OpenBao intermediate CA. Use a chain file containing the sub-CA and its
 issuer chain when the sub-CA is not a self-signed trust anchor.
+`openbao_node_subca_cert_file` must be the actual CA certificate, not a
+listener certificate issued by that CA; the certificate must have `CA:TRUE` and
+certificate-signing key usage. A `.cer` extension is fine when OpenSSL can parse
+the file as PEM or DER X.509.
 `openbao_bootstrap_tls_replace_existing=true` is only needed when replacing an
 already-installed listener cert/key pair, and the disabled bootstrap TLS
 auto-detection prevents old node certs from being used instead of issuing from
 the sub-CA. When `openbao_node_subca_chain_issuer_path` points at a PEM
 issuer/root file or a directory such as `/etc/pki/ca-trust/source/anchors`,
 Ansible builds `openbao_node_subca_chain_file` on the sub-CA host before
-topology detection. Root/issuer chain files are trust material only; they are
-not imported as extra OpenBao PKI issuers.
+topology detection. Directory inputs are scanned for certificates, but only CA
+certificates are included; leaf/listener certificates and non-cert files are
+ignored. Root/issuer chain files are trust material only; they are not imported
+as extra OpenBao PKI issuers.
 
 For offline preparation or manual troubleshooting, the same public chain can be
 built on the signer node with:
@@ -158,8 +164,8 @@ sudo scripts/openbao-build-subca-chain.sh \
 ```
 
 `--issuer-cert` may be a single PEM file or a directory such as
-`/etc/pki/ca-trust/source/anchors`; when it is a directory, all PEM
-certificates in that directory are included in the public issuer bundle.
+`/etc/pki/ca-trust/source/anchors`; when it is a directory, only CA
+certificates from that directory are included in the public issuer bundle.
 
 ## Deploy
 

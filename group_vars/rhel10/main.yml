@@ -3,46 +3,63 @@
 
 openbao_version: "2.5.3"
 
-openbao_public_fqdn: bao.example.com
+openbao_public_fqdn: prod-bao.example.at
 openbao_public_api_addr: "https://{{ openbao_public_fqdn }}"
 
 openbao_nodes:
   rhel10-ansible-1:
-    fqdn: bao1.example.com
+    fqdn: bao1.example.at
     ip: 10.0.0.11
   rhel10-ansible-2:
-    fqdn: bao2.example.com
+    fqdn: bao2.example.at
     ip: 10.0.0.12
   rhel10-ansible-3:
-    fqdn: bao3.example.com
+    fqdn: bao3.example.at
     ip: 10.0.0.13
 
-# Default production mode. OpenBao starts with one listener cert/key pair per
-# host. Preferred real node source names are:
-# /usr/local/lib/cockpitcert/{{ inventory_hostname }}.fullchain.pem
-# /usr/local/lib/cockpitcert/{{ inventory_hostname }}.key.pem
-# FQDN-based names are also auto-detected. For unusual names, set both
-# openbao_node_bootstrap_tls_cert and openbao_node_bootstrap_tls_key. When no
-# real pair exists yet, Ansible generates temporary bootstrap certs under
-# ignored secure-artifacts/ and replaces them after the real files appear.
-# If a subordinate CA exists on one or all OpenBao nodes, operators can use it
-# for bootstrap listener certificates. For Agent renewal with a leaf-only
-# enterprise sub-CA, set openbao_pki_signing_source=node_subca_import and
-# openbao_node_subca_import_private_key_to_openbao=true; this imports the
-# actual sub-CA private key into OpenBao PKI storage. The older
-# openbao_pki_signing_source=node_subca mode signs an OpenBao intermediate and
-# requires the sub-CA path length to allow another CA. To replace an already
-# installed bootstrap listener cert/key, also set
-# openbao_bootstrap_tls_replace_existing=true and
-# openbao_node_bootstrap_tls_autodetect=false so old files are not used.
-# If the sub-CA is issued by a root/intermediate in a local trust directory,
-# set openbao_node_subca_chain_issuer_path to that PEM file or directory and
-# openbao_node_subca_chain_file to the public chain file Ansible should build.
-openbao_certificate_mode: bootstrap
+# Production profile for a leaf-only enterprise sub-CA:
+# - bootstrap listener certs are issued by a node-hosted sub-CA before OpenBao
+#   starts;
+# - the actual sub-CA cert/key are imported into OpenBao PKI for Agent renewals;
+# - OpenBao Agent then issues listener leaf certificates directly from that sub-CA.
+#
+# This intentionally stores the actual sub-CA private key inside OpenBao PKI
+# storage. Keep OpenBao storage, snapshots, and backups protected as CA-key
+# material. The key is not copied to the controller or to peer nodes as a file.
+openbao_certificate_mode: agent
 openbao_bootstrap_tls_source: node
-openbao_node_bootstrap_tls_dir: /usr/local/lib/cockpitcert
+openbao_bootstrap_tls_missing_strategy: issue_from_node_subca
+openbao_bootstrap_tls_replace_existing: true
+openbao_node_bootstrap_tls_autodetect: false
 
-openbao_manage_hosts_entries: true
+openbao_pki_signing_source: node_subca_import
+openbao_node_subca_import_private_key_to_openbao: true
+
+openbao_tls_trust_source: node_subca
+openbao_node_subca_topology: auto
+
+# Replace these with the real sub-CA cert/key paths present on one OpenBao node
+# or on all three OpenBao nodes. The cert must be the actual CA certificate,
+# not a listener/ACME leaf issued by that CA. A .cer extension is fine when
+# OpenSSL can parse the file as PEM or DER X.509. The key must be unencrypted
+# PEM for import.
+openbao_node_subca_cert_file: /usr/local/lib/openbao/subCA-example.at.cer
+openbao_node_subca_key_file: /usr/local/lib/openbao/example.at.pem
+
+# Ansible builds this public chain as:
+# subCA certificate + issuer/root certificates from the issuer path below.
+# Directory inputs ignore non-cert files and leaf/listener certificates. Keep
+# this output path distinct from both cert_file and issuer_path.
+openbao_node_subca_chain_file: /usr/local/lib/openbao/subca-chain-built.pem
+openbao_node_subca_chain_issuer_path: /etc/pki/ca-trust/source/anchors
+
+# Leave empty for auto selection. With one complete sub-CA host, that host signs
+# bootstrap certs and imports the PKI issuer. With all hosts complete, each node
+# signs its own bootstrap cert and the first complete host imports the PKI issuer.
+openbao_node_subca_signer_host: ""
+openbao_node_subca_pki_signer_host: "{{ openbao_node_subca_signer_host }}"
+
+openbao_manage_hosts_entries: false
 openbao_manage_firewalld: true
 openbao_manage_selinux: true
 

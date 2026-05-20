@@ -1,0 +1,185 @@
+---
+- name: Validate node sub-CA material on complete hosts
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    tmpdir="$(mktemp -d)"
+    trap 'rm -rf "${tmpdir}"' EXIT
+
+    subca_only="${tmpdir}/subca.pem"
+    chain_split_dir="${tmpdir}/chain"
+    chain_ca_bundle="${tmpdir}/chain-ca-bundle.pem"
+    issuer_bundle="${tmpdir}/issuer-bundle.pem"
+    key_error="${tmpdir}/key-error.txt"
+    mkdir -p "${chain_split_dir}"
+    : > "${chain_ca_bundle}"
+    : > "${issuer_bundle}"
+
+    write_first_cert_pem() {
+      local source_file="$1"
+      local output_file="$2"
+
+      if openssl x509 -in "${source_file}" -outform PEM > "${output_file}" 2>/dev/null; then
+        return 0
+      fi
+
+      if openssl x509 -inform DER -in "${source_file}" -outform PEM > "${output_file}" 2>/dev/null; then
+        return 0
+      fi
+
+      return 1
+    }
+
+    split_pem_certs() {
+      local source_file="$1"
+      local output_dir="$2"
+      local prefix="$3"
+
+      awk -v dir="${output_dir}" -v prefix="${prefix}" '
+        /-----BEGIN CERTIFICATE-----/ {
+          cert_index++
+          cert_file = sprintf("%s/%s-%04d.pem", dir, prefix, cert_index)
+          in_cert = 1
+        }
+        in_cert { print > cert_file }
+        /-----END CERTIFICATE-----/ && in_cert {
+          close(cert_file)
+          in_cert = 0
+        }
+      ' "${source_file}"
+    }
+
+    cert_fingerprint() {
+      openssl x509 -in "$1" -noout -sha256 -fingerprint \
+        | awk -F= '{ gsub(/:/, "", $2); print toupper($2) }'
+    }
+
+    cert_is_ca() {
+      local cert_file="$1"
+
+      openssl x509 -in "${cert_file}" -noout -text | awk '
+        /X509v3 Basic Constraints/ { in_basic = 1; next }
+        in_basic {
+          if ($0 ~ /CA:TRUE/) ca_true = 1
+          if ($0 ~ /^[[:space:]]*X509v3 /) in_basic = 0
+        }
+        /X509v3 Key Usage/ { key_usage_seen = 1; in_key_usage = 1; next }
+        in_key_usage {
+          if ($0 ~ /Certificate Sign|keyCertSign/) key_cert_sign = 1
+          if ($0 ~ /^[[:space:]]*X509v3 /) in_key_usage = 0
+        }
+        END {
+          exit (ca_true && (!key_usage_seen || key_cert_sign)) ? 0 : 1
+        }
+      '
+    }
+
+    if ! write_first_cert_pem "${OPENBAO_NODE_SUBCA_CERT_FILE}" "${subca_only}"; then
+      printf 'openbao_node_subca_cert_file must be the actual CA certificate, not a listener/leaf certificate issued by the CA. %s is not valid PEM or DER X.509.\n' \
+        "${OPENBAO_NODE_SUBCA_CERT_FILE}" >&2
+      exit 1
+    fi
+
+    if ! cert_is_ca "${subca_only}"; then
+      printf 'openbao_node_subca_cert_file must be the actual CA certificate, not a listener/leaf certificate issued by the CA. %s is not a CA certificate with CA:TRUE and certificate-signing key usage.\n' \
+        "${OPENBAO_NODE_SUBCA_CERT_FILE}" >&2
+      exit 1
+    fi
+
+    if ! openssl pkey -in "${OPENBAO_NODE_SUBCA_KEY_FILE}" -noout > /dev/null 2>"${key_error}" < /dev/null; then
+      if grep -qiE 'pass phrase|passphrase|password|encrypted' "${key_error}"; then
+        printf 'OpenBao node sub-CA operations require an unencrypted PEM private key or prior decryption on the signer host: %s\n' \
+          "${OPENBAO_NODE_SUBCA_KEY_FILE}" >&2
+      else
+        cat "${key_error}" >&2
+      fi
+      exit 1
+    fi
+
+    cert_hash="$(
+      openssl x509 -in "${subca_only}" -pubkey -noout \
+        | openssl pkey -pubin -outform DER \
+        | openssl dgst -sha256 -binary \
+        | openssl base64 -A
+    )"
+    key_hash="$(
+      openssl pkey -in "${OPENBAO_NODE_SUBCA_KEY_FILE}" -pubout -outform DER \
+        | openssl dgst -sha256 -binary \
+        | openssl base64 -A
+    )"
+    if [[ "${cert_hash}" != "${key_hash}" ]]; then
+      printf 'Node sub-CA certificate and private key do not match on %s. openbao_node_subca_cert_file must be the actual CA certificate, not a listener/leaf certificate issued by the CA.\n' \
+        "${OPENBAO_NODE_SUBCA_HOST}" >&2
+      exit 1
+    fi
+
+    subca_fingerprint="$(cert_fingerprint "${subca_only}")"
+
+    if grep -q -- '-----BEGIN CERTIFICATE-----' "${OPENBAO_NODE_SUBCA_CHAIN_FILE}"; then
+      split_pem_certs "${OPENBAO_NODE_SUBCA_CHAIN_FILE}" "${chain_split_dir}" chain
+    else
+      write_first_cert_pem "${OPENBAO_NODE_SUBCA_CHAIN_FILE}" "${chain_split_dir}/chain-0001.pem" || true
+    fi
+
+    chain_cert_count=0
+    first_chain_fingerprint=""
+    while IFS= read -r -d '' cert_file; do
+      if ! openssl x509 -in "${cert_file}" -noout >/dev/null 2>&1; then
+        continue
+      fi
+
+      chain_cert_count=$((chain_cert_count + 1))
+      current_fingerprint="$(cert_fingerprint "${cert_file}")"
+      if [[ -z "${first_chain_fingerprint}" ]]; then
+        first_chain_fingerprint="${current_fingerprint}"
+      fi
+
+      if ! cert_is_ca "${cert_file}"; then
+        cert_subject="$(openssl x509 -in "${cert_file}" -noout -subject)"
+        printf 'openbao_node_subca_chain_file must contain only CA certificates. Leaf/listener certificate found in %s: %s\n' \
+          "${OPENBAO_NODE_SUBCA_CHAIN_FILE}" "${cert_subject}" >&2
+        exit 1
+      fi
+
+      openssl x509 -in "${cert_file}" -outform PEM >> "${chain_ca_bundle}"
+      printf '\n' >> "${chain_ca_bundle}"
+
+      if [[ "${current_fingerprint}" != "${subca_fingerprint}" ]]; then
+        openssl x509 -in "${cert_file}" -outform PEM >> "${issuer_bundle}"
+        printf '\n' >> "${issuer_bundle}"
+      fi
+    done < <(
+      find "${chain_split_dir}" -maxdepth 1 -type f -name 'chain-*.pem' -print0 \
+        | sort -z
+    )
+
+    if [[ "${chain_cert_count}" -eq 0 ]]; then
+      printf 'openbao_node_subca_chain_file did not contain any certificates: %s\n' \
+        "${OPENBAO_NODE_SUBCA_CHAIN_FILE}" >&2
+      exit 1
+    fi
+
+    if [[ "${first_chain_fingerprint}" != "${subca_fingerprint}" ]]; then
+      printf 'openbao_node_subca_chain_file must begin with openbao_node_subca_cert_file so listener fullchains are ordered leaf, subCA, issuer/root chain: %s\n' \
+        "${OPENBAO_NODE_SUBCA_CHAIN_FILE}" >&2
+      exit 1
+    fi
+
+    if [[ -s "${issuer_bundle}" ]]; then
+      openssl verify -CAfile "${issuer_bundle}" "${subca_only}" >/dev/null
+    else
+      openssl verify -CAfile "${chain_ca_bundle}" "${subca_only}" >/dev/null
+    fi
+  args:
+    executable: /bin/bash
+  environment:
+    OPENBAO_NODE_SUBCA_CERT_FILE: "{{ hostvars[item].openbao_node_subca_cert_file | default(openbao_node_subca_cert_file) }}"
+    OPENBAO_NODE_SUBCA_KEY_FILE: "{{ hostvars[item].openbao_node_subca_key_file | default(openbao_node_subca_key_file) }}"
+    OPENBAO_NODE_SUBCA_CHAIN_FILE: "{{ hostvars[item].openbao_node_subca_chain_file | default(openbao_node_subca_chain_file) }}"
+    OPENBAO_NODE_SUBCA_HOST: "{{ item }}"
+  delegate_to: "{{ item }}"
+  loop: "{{ openbao_node_subca_available_hosts }}"
+  register: openbao_node_subca_material_validation
+  changed_when: false
+  failed_when: openbao_node_subca_material_validation.rc != 0
+  run_once: true

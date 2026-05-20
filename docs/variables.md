@@ -205,6 +205,13 @@ When the subordinate CA is issued by another CA, point
 `openbao_node_subca_chain_file` at a PEM bundle that lets OpenSSL verify the
 sub-CA certificate, for example `/etc/openbao-subca/subca-chain.pem` containing
 the sub-CA followed by its issuing root or intermediate chain.
+`openbao_node_subca_cert_file` must point to the actual subordinate CA
+certificate, not to a listener or ACME leaf certificate issued by that CA. The
+certificate must parse as X.509, have `Basic Constraints: CA:TRUE`, and include
+certificate-signing key usage when the key-usage extension is present. A
+`pathlen:0` constraint is accepted because this path issues listener leaf
+certificates directly. A `.cer` extension is fine as long as OpenSSL can parse
+the file as PEM or DER X.509.
 
 Use `openbao_pki_signing_source=node_subca_import` for an enterprise sub-CA
 that can issue leaf/server certificates but cannot issue another CA. This mode
@@ -232,9 +239,10 @@ signing behavior.
 If `openbao_node_subca_chain_issuer_path` is set to a PEM issuer/root file or a
 directory containing PEM issuer/root certificates, Ansible builds
 `openbao_node_subca_chain_file` on each node that has the sub-CA certificate.
-When a directory is provided, all PEM certificates in that directory are
-included after the sub-CA certificate; the sub-CA certificate is verified
-against that issuer bundle before the chain file is accepted.
+When a directory is provided, every file is scanned for certificates, but only
+CA certificates are included after the sub-CA certificate. Leaf/listener
+certificates and non-cert files are ignored. The sub-CA certificate is verified
+against the resulting issuer bundle before the chain file is accepted.
 
 The repository also includes a helper for building the same public chain file
 manually on the signer node:
@@ -247,8 +255,9 @@ sudo scripts/openbao-build-subca-chain.sh \
 ```
 
 `--issuer-cert` accepts either one PEM file or a directory. When a directory is
-provided, every PEM certificate in that directory is appended after the sub-CA
-certificate and used as the verification trust bundle.
+provided, CA certificates in that directory are appended after the sub-CA
+certificate and used as the verification trust bundle; leaf certificates are
+ignored.
 
 With `openbao_node_subca_topology=auto`, exactly one complete sub-CA host signs
 bootstrap certificates for all nodes. If all three nodes have complete sub-CA

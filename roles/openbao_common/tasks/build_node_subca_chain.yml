@@ -49,17 +49,116 @@
     subca_only="${tmpdir}/subca.pem"
     issuer_bundle="${tmpdir}/issuer-bundle.pem"
     chain_candidate="${tmpdir}/chain.pem"
+    seen_fingerprints="${tmpdir}/seen-fingerprints.txt"
 
-    extract_first_cert() {
-      awk '
-        /-----BEGIN CERTIFICATE-----/ { cert_index++ }
-        cert_index == 1 { print }
-        /-----END CERTIFICATE-----/ && cert_index == 1 { exit }
-      ' "$1"
+    : > "${seen_fingerprints}"
+
+    write_first_cert_pem() {
+      local source_file="$1"
+      local output_file="$2"
+
+      if openssl x509 -in "${source_file}" -outform PEM > "${output_file}" 2>/dev/null; then
+        return 0
+      fi
+
+      if openssl x509 -inform DER -in "${source_file}" -outform PEM > "${output_file}" 2>/dev/null; then
+        return 0
+      fi
+
+      return 1
     }
 
-    extract_all_certs() {
-      sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' "$1"
+    split_pem_certs() {
+      local source_file="$1"
+      local output_dir="$2"
+      local prefix="$3"
+
+      awk -v dir="${output_dir}" -v prefix="${prefix}" '
+        /-----BEGIN CERTIFICATE-----/ {
+          cert_index++
+          cert_file = sprintf("%s/%s-%04d.pem", dir, prefix, cert_index)
+          in_cert = 1
+        }
+        in_cert { print > cert_file }
+        /-----END CERTIFICATE-----/ && in_cert {
+          close(cert_file)
+          in_cert = 0
+        }
+      ' "${source_file}"
+    }
+
+    cert_fingerprint() {
+      openssl x509 -in "$1" -noout -sha256 -fingerprint \
+        | awk -F= '{ gsub(/:/, "", $2); print toupper($2) }'
+    }
+
+    cert_is_ca() {
+      local cert_file="$1"
+
+      openssl x509 -in "${cert_file}" -noout -text | awk '
+        /X509v3 Basic Constraints/ { in_basic = 1; next }
+        in_basic {
+          if ($0 ~ /CA:TRUE/) ca_true = 1
+          if ($0 ~ /^[[:space:]]*X509v3 /) in_basic = 0
+        }
+        /X509v3 Key Usage/ { key_usage_seen = 1; in_key_usage = 1; next }
+        in_key_usage {
+          if ($0 ~ /Certificate Sign|keyCertSign/) key_cert_sign = 1
+          if ($0 ~ /^[[:space:]]*X509v3 /) in_key_usage = 0
+        }
+        END {
+          exit (ca_true && (!key_usage_seen || key_cert_sign)) ? 0 : 1
+        }
+      '
+    }
+
+    append_ca_cert_if_usable() {
+      local candidate_cert="$1"
+      local subca_fingerprint="$2"
+      local candidate_fingerprint
+
+      if ! openssl x509 -in "${candidate_cert}" -noout >/dev/null 2>&1; then
+        return 0
+      fi
+
+      if ! cert_is_ca "${candidate_cert}"; then
+        return 0
+      fi
+
+      candidate_fingerprint="$(cert_fingerprint "${candidate_cert}")"
+      if [[ "${candidate_fingerprint}" == "${subca_fingerprint}" ]]; then
+        return 0
+      fi
+
+      if grep -Fxq "${candidate_fingerprint}" "${seen_fingerprints}"; then
+        return 0
+      fi
+
+      printf '%s\n' "${candidate_fingerprint}" >> "${seen_fingerprints}"
+      openssl x509 -in "${candidate_cert}" -outform PEM >> "${issuer_bundle}"
+      printf '\n' >> "${issuer_bundle}"
+    }
+
+    append_ca_certs_from_file() {
+      local source_file="$1"
+      local subca_fingerprint="$2"
+      local split_dir
+      local der_candidate
+
+      split_dir="$(mktemp -d "${tmpdir}/issuer.XXXXXX")"
+      if grep -q -- '-----BEGIN CERTIFICATE-----' "${source_file}"; then
+        split_pem_certs "${source_file}" "${split_dir}" issuer
+      else
+        der_candidate="${split_dir}/issuer-0001.pem"
+        openssl x509 -inform DER -in "${source_file}" -outform PEM > "${der_candidate}" 2>/dev/null || true
+      fi
+
+      while IFS= read -r -d '' cert_file; do
+        append_ca_cert_if_usable "${cert_file}" "${subca_fingerprint}"
+      done < <(
+        find "${split_dir}" -maxdepth 1 -type f -name 'issuer-*.pem' -print0 \
+          | sort -z
+      )
     }
 
     normalize_pem_bundle() {
@@ -91,7 +190,12 @@
       )
     }
 
-    extract_first_cert "${OPENBAO_NODE_SUBCA_CERT_FILE}" > "${subca_only}"
+    if ! write_first_cert_pem "${OPENBAO_NODE_SUBCA_CERT_FILE}" "${subca_only}"; then
+      printf 'subCA certificate is not valid PEM or DER X.509: %s\n' \
+        "${OPENBAO_NODE_SUBCA_CERT_FILE}" >&2
+      exit 1
+    fi
+
     if [[ ! -s "${subca_only}" ]]; then
       printf 'subCA certificate did not contain a PEM certificate: %s\n' \
         "${OPENBAO_NODE_SUBCA_CERT_FILE}" >&2
@@ -104,32 +208,28 @@
       exit 1
     fi
 
+    if ! cert_is_ca "${subca_only}"; then
+      printf '%s is not a CA certificate. It appears to be a leaf/listener certificate. Set openbao_node_subca_cert_file to the actual enterprise subCA certificate.\n' \
+        "${OPENBAO_NODE_SUBCA_CERT_FILE}" >&2
+      exit 1
+    fi
+
+    subca_fingerprint="$(cert_fingerprint "${subca_only}")"
+
     : > "${issuer_bundle}"
     if [[ -d "${OPENBAO_NODE_SUBCA_CHAIN_ISSUER_PATH}" ]]; then
-      output_real="${OPENBAO_NODE_SUBCA_CHAIN_FILE}"
-      if [[ -e "${OPENBAO_NODE_SUBCA_CHAIN_FILE}" ]]; then
-        output_real="$(readlink -f "${OPENBAO_NODE_SUBCA_CHAIN_FILE}")"
-      fi
-      subca_real="$(readlink -f "${OPENBAO_NODE_SUBCA_CERT_FILE}")"
       while IFS= read -r -d '' issuer_file; do
-        issuer_real="$(readlink -f "${issuer_file}")"
-        if [[ "${issuer_real}" == "${output_real}" || "${issuer_real}" == "${subca_real}" ]]; then
-          continue
-        fi
-        if grep -q -- '-----BEGIN CERTIFICATE-----' "${issuer_file}"; then
-          extract_all_certs "${issuer_file}" >> "${issuer_bundle}"
-          printf '\n' >> "${issuer_bundle}"
-        fi
+        append_ca_certs_from_file "${issuer_file}" "${subca_fingerprint}"
       done < <(
         find "${OPENBAO_NODE_SUBCA_CHAIN_ISSUER_PATH}" -maxdepth 1 -type f -print0 \
           | sort -z
       )
     else
-      extract_all_certs "${OPENBAO_NODE_SUBCA_CHAIN_ISSUER_PATH}" > "${issuer_bundle}"
+      append_ca_certs_from_file "${OPENBAO_NODE_SUBCA_CHAIN_ISSUER_PATH}" "${subca_fingerprint}"
     fi
 
     if [[ ! -s "${issuer_bundle}" ]]; then
-      printf 'issuer path did not contain any PEM certificates: %s\n' \
+      printf 'issuer path did not contain any usable CA certificates: %s\n' \
         "${OPENBAO_NODE_SUBCA_CHAIN_ISSUER_PATH}" >&2
       exit 1
     fi
@@ -149,9 +249,9 @@
     fi
 
     {
-      extract_all_certs "${subca_only}"
+      openssl x509 -in "${subca_only}" -outform PEM
       printf '\n'
-      extract_all_certs "${issuer_bundle}"
+      cat "${issuer_bundle}"
     } > "${chain_candidate}"
     normalized_candidate="${tmpdir}/chain.normalized.pem"
     normalized_current="${tmpdir}/current.normalized.pem"
