@@ -1,0 +1,566 @@
+---
+- name: Inspect node sub-CA material
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 - <<'PY'
+    import hashlib
+    import json
+    import os
+    import re
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+
+    def run_openssl(args, data=None):
+        return subprocess.run(
+            ["openssl", *args],
+            input=data,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+
+    def first_cert_pem(source):
+        path = Path(source)
+        if not path.exists():
+            return None, "missing", "unknown"
+
+        result = run_openssl(["x509", "-in", str(path), "-outform", "PEM"])
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout, "ok", "pem"
+
+        result = run_openssl(["x509", "-inform", "DER", "-in", str(path), "-outform", "PEM"])
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout, "ok", "der"
+
+        return None, "invalid", "unknown"
+
+
+    def split_pem_certs(source):
+        path = Path(source)
+        if not path.exists() or not path.is_file():
+            return []
+
+        data = path.read_bytes()
+        if b"-----BEGIN CERTIFICATE-----" not in data:
+            cert, status, _encoding = first_cert_pem(path)
+            return [cert] if status == "ok" else []
+
+        certs = []
+        pattern = re.compile(
+            rb"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+            re.DOTALL,
+        )
+        for match in pattern.finditer(data):
+            cert = match.group(0) + b"\n"
+            if run_openssl(["x509", "-noout"], cert).returncode == 0:
+                normalized = run_openssl(["x509", "-outform", "PEM"], cert)
+                if normalized.returncode == 0 and normalized.stdout.strip():
+                    certs.append(normalized.stdout)
+        return certs
+
+
+    def cert_text(cert_pem):
+        result = run_openssl(["x509", "-noout", "-text"], cert_pem)
+        return result.stdout.decode("utf-8", "replace") if result.returncode == 0 else ""
+
+
+    def cert_field(cert_pem, *args):
+        result = run_openssl(["x509", "-noout", *args], cert_pem)
+        if result.returncode != 0:
+            return ""
+        return result.stdout.decode("utf-8", "replace").strip()
+
+
+    def extension_value(text, name):
+        lines = text.splitlines()
+        values = []
+        capture = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("X509v3 ") or stripped.startswith("Netscape "):
+                if capture:
+                    break
+                capture = name in stripped
+                continue
+            if capture:
+                if stripped.startswith("Signature Algorithm:"):
+                    break
+                if stripped:
+                    values.append(stripped)
+        return ", ".join(values)
+
+
+    def cert_fingerprint(cert_pem):
+        result = run_openssl(["x509", "-noout", "-sha256", "-fingerprint"], cert_pem)
+        if result.returncode != 0:
+            return ""
+        text = result.stdout.decode("utf-8", "replace").strip()
+        return text.split("=", 1)[-1].replace(":", "").upper()
+
+
+    def cert_public_key_hash(cert_pem):
+        pubkey = run_openssl(["x509", "-pubkey", "-noout"], cert_pem)
+        if pubkey.returncode != 0:
+            return None
+        der = run_openssl(["pkey", "-pubin", "-outform", "DER"], pubkey.stdout)
+        if der.returncode != 0:
+            return None
+        return hashlib.sha256(der.stdout).hexdigest()
+
+
+    def key_public_key_hash(key_path):
+        result = run_openssl(["pkey", "-in", str(key_path), "-pubout", "-outform", "DER"])
+        if result.returncode != 0:
+            return None
+        return hashlib.sha256(result.stdout).hexdigest()
+
+
+    def cert_ca_details(cert_pem):
+        text = cert_text(cert_pem)
+        basic_constraints = extension_value(text, "Basic Constraints")
+        key_usage = extension_value(text, "Key Usage")
+        compact_basic = basic_constraints.replace(" ", "").upper()
+        cert_is_ca = "CA:TRUE" in compact_basic
+        pathlen_match = re.search(r"pathlen:([0-9]+)", basic_constraints, re.IGNORECASE)
+        key_usage_present = bool(key_usage)
+        has_key_cert_sign = None
+        if key_usage_present:
+            has_key_cert_sign = (
+                "Certificate Sign" in key_usage
+                or "keyCertSign" in key_usage
+            )
+        usable_ca = cert_is_ca and (not key_usage_present or bool(has_key_cert_sign))
+        return {
+            "basic_constraints": basic_constraints,
+            "key_usage": key_usage,
+            "cert_is_ca": cert_is_ca,
+            "cert_has_key_cert_sign": has_key_cert_sign,
+            "cert_pathlen": pathlen_match.group(1) if pathlen_match else None,
+            "usable_ca": usable_ca,
+        }
+
+
+    def append_issuer_cert(result, cert_pem, subca_fingerprint, seen):
+        if not cert_pem:
+            return None
+        result["issuer_scan_certificates_found"] += 1
+        details = cert_ca_details(cert_pem)
+        if not details["usable_ca"]:
+            result["issuer_scan_leaf_certificates_ignored"] += 1
+            return None
+        fingerprint = cert_fingerprint(cert_pem)
+        if fingerprint == subca_fingerprint:
+            result["issuer_scan_duplicates_ignored"] += 1
+            return None
+        if fingerprint in seen:
+            result["issuer_scan_duplicates_ignored"] += 1
+            return None
+        seen.add(fingerprint)
+        result["issuer_scan_ca_certificates_used"] += 1
+        return cert_pem
+
+
+    host = os.environ["OPENBAO_NODE_SUBCA_HOST"]
+    cert_path = os.environ["OPENBAO_NODE_SUBCA_CERT_FILE"]
+    key_path = os.environ["OPENBAO_NODE_SUBCA_KEY_FILE"]
+    chain_path = os.environ["OPENBAO_NODE_SUBCA_CHAIN_FILE"]
+    issuer_path = os.environ["OPENBAO_NODE_SUBCA_CHAIN_ISSUER_PATH"]
+    chain_build_enabled = os.environ["OPENBAO_NODE_SUBCA_CHAIN_BUILD_ENABLED"].lower() == "true"
+
+    result = {
+        "host": host,
+        "cert_path": cert_path,
+        "key_path": key_path,
+        "chain_path": chain_path,
+        "issuer_path": issuer_path,
+        "chain_build_enabled": chain_build_enabled,
+        "cert_exists": Path(cert_path).exists(),
+        "key_exists": Path(key_path).exists(),
+        "chain_exists": Path(chain_path).exists(),
+        "issuer_path_exists": Path(issuer_path).exists() if issuer_path else False,
+        "cert_parse_status": "missing",
+        "cert_encoding": "unknown",
+        "cert_subject": "",
+        "cert_issuer": "",
+        "cert_serial": "",
+        "cert_sha256_fingerprint": "",
+        "cert_not_before": "",
+        "cert_not_after": "",
+        "cert_basic_constraints": "",
+        "cert_key_usage": "",
+        "cert_is_ca": False,
+        "cert_has_key_cert_sign": None,
+        "cert_pathlen": None,
+        "key_parse_status": "missing",
+        "cert_key_match": None,
+        "chain_status": "missing",
+        "chain_first_cert_matches_subca": None,
+        "chain_contains_only_ca_certs": None,
+        "issuer_scan_total_files": 0,
+        "issuer_scan_certificates_found": 0,
+        "issuer_scan_ca_certificates_used": 0,
+        "issuer_scan_leaf_certificates_ignored": 0,
+        "issuer_scan_non_cert_files_ignored": 0,
+        "issuer_scan_duplicates_ignored": 0,
+        "subca_verifies_against_issuer_bundle": None,
+        "material_present": False,
+        "material_complete": False,
+        "material_partial": False,
+        "diagnostic_status": "ABSENT",
+        "errors": [],
+        "recommended_action": "No node sub-CA material is present on this host.",
+    }
+
+    result["material_present"] = (
+        result["cert_exists"] or result["key_exists"] or result["chain_exists"]
+    )
+
+    subca_pem, cert_status, cert_encoding = first_cert_pem(cert_path)
+    result["cert_parse_status"] = cert_status
+    result["cert_encoding"] = cert_encoding
+    if subca_pem:
+        details = cert_ca_details(subca_pem)
+        result.update({
+            "cert_subject": cert_field(subca_pem, "-subject"),
+            "cert_issuer": cert_field(subca_pem, "-issuer"),
+            "cert_serial": cert_field(subca_pem, "-serial"),
+            "cert_sha256_fingerprint": cert_fingerprint(subca_pem),
+            "cert_not_before": cert_field(subca_pem, "-startdate"),
+            "cert_not_after": cert_field(subca_pem, "-enddate"),
+            "cert_basic_constraints": details["basic_constraints"],
+            "cert_key_usage": details["key_usage"],
+            "cert_is_ca": details["cert_is_ca"],
+            "cert_has_key_cert_sign": details["cert_has_key_cert_sign"],
+            "cert_pathlen": details["cert_pathlen"],
+        })
+        if not details["usable_ca"]:
+            result["errors"].append(
+                "openbao_node_subca_cert_file must be the actual enterprise "
+                "subCA certificate, not a listener/leaf certificate issued by the CA."
+            )
+    elif result["cert_exists"]:
+        result["errors"].append(
+            "openbao_node_subca_cert_file is present but is not valid PEM or DER X.509."
+        )
+
+    if result["key_exists"]:
+        key_check = run_openssl(["pkey", "-in", key_path, "-noout"])
+        if key_check.returncode == 0:
+            result["key_parse_status"] = "ok"
+        else:
+            key_error = key_check.stderr.decode("utf-8", "replace")
+            if re.search(r"pass phrase|passphrase|password|encrypted", key_error, re.IGNORECASE):
+                result["key_parse_status"] = "encrypted_or_passphrase_required"
+                result["errors"].append(
+                    "OpenBao node sub-CA operations require an unencrypted PEM private key "
+                    "or prior decryption on the signer host."
+                )
+            else:
+                result["key_parse_status"] = "invalid"
+                result["errors"].append("openbao_node_subca_key_file is present but not parseable.")
+
+        if subca_pem and result["key_parse_status"] == "ok":
+            cert_hash = cert_public_key_hash(subca_pem)
+            key_hash = key_public_key_hash(key_path)
+            result["cert_key_match"] = cert_hash is not None and cert_hash == key_hash
+            if not result["cert_key_match"]:
+                result["errors"].append("Node sub-CA certificate and private key do not match.")
+    elif result["material_present"]:
+        result["errors"].append("openbao_node_subca_key_file is missing.")
+
+    if not result["cert_exists"] and result["material_present"]:
+        result["errors"].append("openbao_node_subca_cert_file is missing.")
+
+    if result["chain_exists"]:
+        chain_certs = split_pem_certs(chain_path)
+        if not chain_certs:
+            result["chain_status"] = "invalid"
+            result["errors"].append("openbao_node_subca_chain_file did not contain certificates.")
+        else:
+            result["chain_status"] = "ok"
+            result["chain_contains_only_ca_certs"] = True
+            if subca_pem:
+                result["chain_first_cert_matches_subca"] = (
+                    cert_fingerprint(chain_certs[0]) == result["cert_sha256_fingerprint"]
+                )
+                if not result["chain_first_cert_matches_subca"]:
+                    result["errors"].append(
+                        "openbao_node_subca_chain_file must begin with openbao_node_subca_cert_file "
+                        "so listener fullchains are ordered leaf, subCA, issuer/root chain."
+                    )
+            for cert in chain_certs:
+                details = cert_ca_details(cert)
+                if not details["usable_ca"]:
+                    result["chain_contains_only_ca_certs"] = False
+                    result["errors"].append(
+                        "openbao_node_subca_chain_file contains a leaf/listener certificate: "
+                        f"{cert_field(cert, '-subject')}"
+                    )
+    elif result["material_present"] and not chain_build_enabled:
+        result["errors"].append("openbao_node_subca_chain_file is missing.")
+
+    issuer_certs = []
+    if chain_build_enabled:
+        issuer = Path(issuer_path)
+        if not issuer_path:
+            result["errors"].append("openbao_node_subca_chain_issuer_path is empty.")
+        elif not issuer.exists():
+            result["errors"].append("openbao_node_subca_chain_issuer_path does not exist.")
+        else:
+            issuer_files = []
+            if issuer.is_dir():
+                issuer_files = sorted(path for path in issuer.iterdir() if path.is_file())
+            elif issuer.is_file():
+                issuer_files = [issuer]
+            else:
+                result["errors"].append("openbao_node_subca_chain_issuer_path is not a file or directory.")
+
+            result["issuer_scan_total_files"] = len(issuer_files)
+            seen = set()
+            for issuer_file in issuer_files:
+                before_found = result["issuer_scan_certificates_found"]
+                certs = split_pem_certs(issuer_file)
+                if not certs:
+                    result["issuer_scan_non_cert_files_ignored"] += 1
+                    continue
+                for cert in certs:
+                    usable = append_issuer_cert(
+                        result,
+                        cert,
+                        result["cert_sha256_fingerprint"],
+                        seen,
+                    )
+                    if usable:
+                        issuer_certs.append(usable)
+                if result["issuer_scan_certificates_found"] == before_found:
+                    result["issuer_scan_non_cert_files_ignored"] += 1
+
+            if subca_pem and issuer_certs:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    subca_file = Path(tmpdir) / "subca.pem"
+                    issuer_file = Path(tmpdir) / "issuer.pem"
+                    subca_file.write_bytes(subca_pem)
+                    issuer_file.write_bytes(b"\n".join(issuer_certs))
+                    verify = run_openssl(["verify", "-CAfile", str(issuer_file), str(subca_file)])
+                    result["subca_verifies_against_issuer_bundle"] = verify.returncode == 0
+                if not result["subca_verifies_against_issuer_bundle"]:
+                    result["errors"].append("subCA certificate does not verify against issuer bundle.")
+            elif result["material_present"] and subca_pem:
+                result["subca_verifies_against_issuer_bundle"] = False
+                result["errors"].append(
+                    "openbao_node_subca_chain_issuer_path did not contain usable CA certificates."
+                )
+
+            if result["material_present"] and not result["chain_exists"]:
+                if result["subca_verifies_against_issuer_bundle"]:
+                    result["chain_status"] = "missing_would_build_from_issuer_path"
+                else:
+                    result["errors"].append(
+                        "openbao_node_subca_chain_file is missing and issuer path cannot build it."
+                    )
+
+    chain_available = result["chain_exists"] or (
+        chain_build_enabled and result["subca_verifies_against_issuer_bundle"] is True
+    )
+    result["material_complete"] = (
+        result["cert_exists"] and result["key_exists"] and chain_available
+    )
+    result["material_partial"] = result["material_present"] and not result["material_complete"]
+
+    if result["errors"]:
+        result["diagnostic_status"] = "FAIL"
+        result["recommended_action"] = "Fix the reported host/path issues before running playbooks/site.yml."
+    elif result["material_complete"]:
+        result["diagnostic_status"] = "PASS"
+        result["recommended_action"] = "Node sub-CA material is usable."
+    elif result["material_present"]:
+        result["diagnostic_status"] = "FAIL"
+        result["recommended_action"] = "Complete or remove partial node sub-CA material."
+    else:
+        result["diagnostic_status"] = "ABSENT"
+
+    print(json.dumps(result, sort_keys=True))
+    PY
+  args:
+    executable: /bin/bash
+  environment:
+    OPENBAO_NODE_SUBCA_HOST: "{{ inventory_hostname }}"
+    OPENBAO_NODE_SUBCA_CERT_FILE: "{{ openbao_node_subca_cert_file }}"
+    OPENBAO_NODE_SUBCA_KEY_FILE: "{{ openbao_node_subca_key_file }}"
+    OPENBAO_NODE_SUBCA_CHAIN_FILE: "{{ openbao_node_subca_chain_file }}"
+    OPENBAO_NODE_SUBCA_CHAIN_ISSUER_PATH: "{{ openbao_node_subca_chain_issuer_path }}"
+    OPENBAO_NODE_SUBCA_CHAIN_BUILD_ENABLED: "{{ openbao_node_subca_chain_build_enabled | bool | string | lower }}"
+  register: openbao_node_subca_diagnostic_command
+  changed_when: false
+  failed_when: false
+
+- name: Store node sub-CA diagnostic result
+  ansible.builtin.set_fact:
+    openbao_node_subca_diagnostic: "{{ openbao_node_subca_diagnostic_command.stdout | from_json }}"
+
+- name: Render node sub-CA diagnostic summary
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 - <<'PY'
+    import json
+    import os
+
+    results = json.loads(os.environ["OPENBAO_NODE_SUBCA_DIAGNOSTIC_RESULTS"])
+    cluster_hosts = json.loads(os.environ["OPENBAO_NODE_SUBCA_CLUSTER_HOSTS"])
+    topology = os.environ["OPENBAO_NODE_SUBCA_TOPOLOGY"]
+    signer_host = os.environ["OPENBAO_NODE_SUBCA_SIGNER_HOST"]
+    pki_signer_host = os.environ["OPENBAO_NODE_SUBCA_PKI_SIGNER_HOST"]
+
+    by_host = {item["host"]: item for item in results}
+    ordered = [by_host[host] for host in cluster_hosts if host in by_host]
+    complete_hosts = [
+        item["host"]
+        for item in ordered
+        if item["diagnostic_status"] == "PASS" and item["material_complete"]
+    ]
+    partial_hosts = [item["host"] for item in ordered if item["material_partial"]]
+    absent_hosts = [
+        item["host"]
+        for item in ordered
+        if not item["material_present"] and item["diagnostic_status"] == "ABSENT"
+    ]
+    invalid_hosts = [item["host"] for item in ordered if item["diagnostic_status"] == "FAIL"]
+
+    topology_errors = []
+    bootstrap_signer = "unresolved"
+    pki_signer = "unresolved"
+    if topology == "auto":
+        if len(complete_hosts) == len(cluster_hosts):
+            bootstrap_signer = "each node signs locally"
+            pki_signer = pki_signer_host or signer_host or complete_hosts[0]
+        elif len(complete_hosts) == 1:
+            bootstrap_signer = complete_hosts[0]
+            pki_signer = pki_signer_host or signer_host or complete_hosts[0]
+        else:
+            topology_errors.append(
+                "openbao_node_subca_topology=auto requires exactly one complete "
+                "sub-CA host or every OpenBao node to be complete."
+            )
+    elif topology == "single_signer":
+        selected = signer_host or (complete_hosts[0] if len(complete_hosts) == 1 else "")
+        bootstrap_signer = selected or "unresolved"
+        pki_signer = pki_signer_host or selected or "unresolved"
+        if not selected:
+            topology_errors.append(
+                "openbao_node_subca_topology=single_signer requires "
+                "openbao_node_subca_signer_host when the signer cannot be inferred."
+            )
+        elif selected not in complete_hosts:
+            topology_errors.append(
+                f"Selected node sub-CA signer host is not complete and valid: {selected}"
+            )
+    elif topology == "every_node":
+        bootstrap_signer = "each node signs locally"
+        pki_signer = pki_signer_host or signer_host or (complete_hosts[0] if complete_hosts else "unresolved")
+        if len(complete_hosts) != len(cluster_hosts):
+            topology_errors.append(
+                "openbao_node_subca_topology=every_node requires complete valid "
+                "sub-CA material on every OpenBao node."
+            )
+    else:
+        topology_errors.append(
+            "openbao_node_subca_topology must be auto, single_signer, or every_node."
+        )
+
+    if pki_signer_host and pki_signer_host not in complete_hosts:
+        topology_errors.append(
+            f"Selected PKI signer host is not complete and valid: {pki_signer_host}"
+        )
+
+    print("Node sub-CA diagnostic summary")
+    print("")
+    for item in ordered:
+        status = item["diagnostic_status"]
+        print(f"{item['host']}:")
+        print(f"  cert: {item['cert_path']}")
+        print(f"  key: {item['key_path']}")
+        print(f"  chain: {item['chain_path']}")
+        print(f"  result: {status}")
+        if item["cert_subject"]:
+            print(f"  subject: {item['cert_subject']}")
+        if item["cert_issuer"]:
+            print(f"  issuer: {item['cert_issuer']}")
+        if item["cert_basic_constraints"]:
+            print(f"  basic constraints: {item['cert_basic_constraints']}")
+        if item["cert_key_usage"]:
+            print(f"  key usage: {item['cert_key_usage']}")
+        if item["cert_pathlen"] is not None:
+            print(f"  pathlen: {item['cert_pathlen']}")
+        print(f"  cert is CA: {item['cert_is_ca']}")
+        print(f"  key parse: {item['key_parse_status']}")
+        print(f"  cert/key match: {item['cert_key_match']}")
+        print(f"  chain status: {item['chain_status']}")
+        if item["chain_build_enabled"]:
+            print(f"  issuer path: {item['issuer_path']}")
+            print(
+                "  issuer scan: "
+                f"{item['issuer_scan_ca_certificates_used']} CA certs used, "
+                f"{item['issuer_scan_leaf_certificates_ignored']} leaf certs ignored, "
+                f"{item['issuer_scan_non_cert_files_ignored']} non-cert files ignored, "
+                f"{item['issuer_scan_duplicates_ignored']} duplicates ignored"
+            )
+            print(
+                "  subCA verifies against issuer bundle: "
+                f"{item['subca_verifies_against_issuer_bundle']}"
+            )
+        if item["errors"]:
+            for error in item["errors"]:
+                print(f"  problem: {error}")
+        print(f"  action: {item['recommended_action']}")
+        print("")
+
+    print("Topology:")
+    print(f"  mode: {topology}")
+    print(f"  complete hosts: {', '.join(complete_hosts) if complete_hosts else '(none)'}")
+    print(f"  partial hosts: {', '.join(partial_hosts) if partial_hosts else '(none)'}")
+    print(f"  hosts without material: {', '.join(absent_hosts) if absent_hosts else '(none)'}")
+    print(f"  selected bootstrap signer: {bootstrap_signer}")
+    print(f"  selected PKI signer: {pki_signer}")
+    if topology_errors:
+        for error in topology_errors:
+            print(f"  problem: {error}")
+    else:
+        print("  result: PASS")
+
+    if invalid_hosts or topology_errors:
+        raise SystemExit(1)
+    PY
+  args:
+    executable: /bin/bash
+  environment:
+    OPENBAO_NODE_SUBCA_DIAGNOSTIC_RESULTS: >-
+      {{
+        ansible_play_hosts_all
+        | map('extract', hostvars, 'openbao_node_subca_diagnostic')
+        | list
+        | to_json
+      }}
+    OPENBAO_NODE_SUBCA_CLUSTER_HOSTS: "{{ groups[openbao_cluster_group] | to_json }}"
+    OPENBAO_NODE_SUBCA_TOPOLOGY: "{{ openbao_node_subca_topology }}"
+    OPENBAO_NODE_SUBCA_SIGNER_HOST: "{{ openbao_node_subca_signer_host }}"
+    OPENBAO_NODE_SUBCA_PKI_SIGNER_HOST: "{{ openbao_node_subca_pki_signer_host }}"
+  register: openbao_node_subca_diagnostic_summary
+  changed_when: false
+  failed_when: false
+  run_once: true
+
+- name: Print node sub-CA diagnostic summary
+  ansible.builtin.debug:
+    msg: "{{ openbao_node_subca_diagnostic_summary.stdout_lines }}"
+  run_once: true
+
+- name: Fail when node sub-CA diagnostics found invalid material
+  ansible.builtin.fail:
+    msg: >-
+      Node sub-CA diagnostics found invalid CA material. Fix the reported
+      host/path issues before running playbooks/site.yml.
+  when: openbao_node_subca_diagnostic_summary.rc != 0
+  run_once: true

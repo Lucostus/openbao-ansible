@@ -244,6 +244,23 @@ CA certificates are included after the sub-CA certificate. Leaf/listener
 certificates and non-cert files are ignored. The sub-CA certificate is verified
 against the resulting issuer bundle before the chain file is accepted.
 
+Run the read-only node sub-CA diagnostic before deployment when checking
+enterprise CA inputs:
+
+```bash
+ansible-playbook playbooks/diagnose_node_subca.yml
+```
+
+The diagnostic reports every node and then fails once at the end if material is
+invalid. Use it first if deployment reports `is not a CA certificate. It
+appears to be a leaf/listener certificate.` The configured
+`openbao_node_subca_cert_file` must be the actual subordinate CA certificate,
+not a listener/ACME/server certificate. Expected certificate properties are
+`Basic Constraints: CA:TRUE` and, when key usage is present,
+`Key Usage: Certificate Sign`. `pathlen:0` is valid for issuing listener leaf
+certificates. A `.cer` extension is acceptable when OpenSSL can parse the file
+as PEM or DER X.509.
+
 The repository also includes a helper for building the same public chain file
 manually on the signer node:
 

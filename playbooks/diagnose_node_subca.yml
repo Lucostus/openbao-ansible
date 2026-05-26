@@ -1,0 +1,23 @@
+---
+- name: Validate selected OpenBao diagnostic target
+  hosts: localhost
+  become: false
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Validate OpenBao target group
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/validate_target_group.yml
+
+- name: Diagnose OpenBao node sub-CA material
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
+  become: true
+  gather_facts: false
+  any_errors_fatal: false
+  vars:
+    openbao_validate_bootstrap_inputs: false
+  pre_tasks:
+    - name: Load OpenBao variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
+  tasks:
+    - name: Diagnose node sub-CA material
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/diagnose_node_subca_material.yml

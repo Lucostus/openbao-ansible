@@ -43,6 +43,11 @@ openbao_node_subca_topology: auto
 # not a listener/ACME leaf issued by that CA. A .cer extension is fine when
 # OpenSSL can parse the file as PEM or DER X.509. The key must be unencrypted
 # PEM for import.
+# If deployment reports "is not a CA certificate. It appears to be a
+# leaf/listener certificate.", run:
+#   ansible-playbook playbooks/diagnose_node_subca.yml
+# The diagnostic reports every node and confirms CA:TRUE, Certificate Sign,
+# cert/key matching, chain contents, and issuer-directory scan results.
 openbao_node_subca_cert_file: /usr/local/lib/openbao/subCA-example.at.cer
 openbao_node_subca_key_file: /usr/local/lib/openbao/example.at.pem
 

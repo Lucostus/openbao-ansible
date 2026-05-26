@@ -153,6 +153,18 @@ certificates are included; leaf/listener certificates and non-cert files are
 ignored. Root/issuer chain files are trust material only; they are not imported
 as extra OpenBao PKI issuers.
 
+When troubleshooting node sub-CA inputs, run the read-only diagnostic playbook:
+
+```bash
+ansible-playbook playbooks/diagnose_node_subca.yml
+```
+
+Use this first if deployment reports `is not a CA certificate. It appears to
+be a leaf/listener certificate.` The configured sub-CA certificate must report
+`Basic Constraints: CA:TRUE` and `Key Usage: Certificate Sign`; `pathlen:0` is
+valid for issuing listener leaf certificates. A `.cer` extension is fine when
+OpenSSL can parse the file as PEM or DER X.509.
+
 For offline preparation or manual troubleshooting, the same public chain can be
 built on the signer node with:
 
