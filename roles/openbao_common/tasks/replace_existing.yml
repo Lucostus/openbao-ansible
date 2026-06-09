@@ -1,0 +1,284 @@
+---
+- name: Resolve replacement controller paths
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python | default('/usr/bin/python3') }}"
+      - -c
+      - |
+        import json
+        import os
+
+        print(json.dumps({
+            "secure_artifacts_dir": os.path.realpath(os.environ["OPENBAO_SECURE_ARTIFACTS_DIR"]),
+            "repo_root": os.path.realpath(os.path.join(os.environ["OPENBAO_PLAYBOOK_DIR"], "..")),
+            "repo_bootstrap_tls_dir": os.path.realpath(
+                os.path.join(os.environ["OPENBAO_PLAYBOOK_DIR"], "..", "files", "bootstrap-tls")
+            ),
+            "controller_bootstrap_tls_cert": os.path.realpath(os.environ["OPENBAO_CONTROLLER_BOOTSTRAP_TLS_CERT"]),
+            "controller_bootstrap_tls_key": os.path.realpath(os.environ["OPENBAO_CONTROLLER_BOOTSTRAP_TLS_KEY"]),
+            "node_bootstrap_tls_chain": (
+                os.path.realpath(os.environ["OPENBAO_NODE_BOOTSTRAP_TLS_CHAIN"])
+                if os.environ["OPENBAO_NODE_BOOTSTRAP_TLS_CHAIN"]
+                else ""
+            ),
+        }))
+  environment:
+    OPENBAO_SECURE_ARTIFACTS_DIR: "{{ openbao_secure_artifacts_dir }}"
+    OPENBAO_PLAYBOOK_DIR: "{{ playbook_dir }}"
+    OPENBAO_CONTROLLER_BOOTSTRAP_TLS_CERT: "{{ openbao_controller_bootstrap_tls_cert }}"
+    OPENBAO_CONTROLLER_BOOTSTRAP_TLS_KEY: "{{ openbao_controller_bootstrap_tls_key }}"
+    OPENBAO_NODE_BOOTSTRAP_TLS_CHAIN: "{{ openbao_node_bootstrap_tls_chain }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_replace_controller_paths
+  changed_when: false
+
+- name: Assert replacement controller artifact path is safe
+  ansible.builtin.assert:
+    that:
+      - openbao_secure_artifacts_dir | string | trim | length > 0
+      - openbao_secure_artifacts_dir | string | trim is match('^/')
+      - openbao_replace_secure_artifacts_dir | length > 1
+      - openbao_replace_secure_artifacts_dir not in openbao_replace_unsafe_controller_paths
+      - >-
+        openbao_replace_preserved_controller_path | length == 0
+        or openbao_replace_secure_artifacts_dir != openbao_replace_preserved_controller_path
+      - >-
+        openbao_replace_preserved_controller_path | length == 0
+        or not (
+          openbao_replace_preserved_controller_path
+          is match('^' ~ (openbao_replace_secure_artifacts_dir | regex_escape) ~ '/')
+        )
+      - >-
+        openbao_replace_preserved_controller_path | length == 0
+        or not (
+          openbao_replace_secure_artifacts_dir
+          is match('^' ~ (openbao_replace_preserved_controller_path | regex_escape) ~ '/')
+        )
+    fail_msg: >-
+      Refusing to replace OpenBao because openbao_secure_artifacts_dir is unsafe:
+      {{ openbao_secure_artifacts_dir }}.
+  vars:
+    openbao_replace_controller_path_data: "{{ openbao_replace_controller_paths.stdout | from_json }}"
+    openbao_replace_secure_artifacts_dir: "{{ openbao_replace_controller_path_data.secure_artifacts_dir }}"
+    openbao_replace_unsafe_controller_paths:
+      - /
+      - /etc
+      - /var
+      - /usr
+      - /tmp
+      - "{{ openbao_replace_controller_path_data.repo_root }}"
+    openbao_replace_preserved_controller_paths:
+      - "{{ openbao_replace_controller_path_data.repo_bootstrap_tls_dir }}"
+      - "{{ openbao_replace_controller_path_data.controller_bootstrap_tls_cert }}"
+      - "{{ openbao_replace_controller_path_data.controller_bootstrap_tls_key }}"
+      - "{{ openbao_replace_controller_path_data.node_bootstrap_tls_chain }}"
+    openbao_replace_preserved_controller_path: "{{ item }}"
+  loop: "{{ openbao_replace_preserved_controller_paths }}"
+
+- name: Delete controller OpenBao artifacts
+  ansible.builtin.file:
+    path: "{{ openbao_secure_artifacts_dir }}"
+    state: absent
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Gather service facts for OpenBao replacement
+  ansible.builtin.service_facts:
+
+- name: Stop and disable OpenBao agent during replacement
+  ansible.builtin.systemd:
+    name: openbao-agent
+    enabled: false
+    state: stopped
+  when: "'openbao-agent.service' in ansible_facts.services"
+
+- name: Stop and disable OpenBao during replacement
+  ansible.builtin.systemd:
+    name: openbao
+    enabled: false
+    state: stopped
+  when: "'openbao.service' in ansible_facts.services"
+
+- name: Remove managed OpenBao systemd files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/openbao.service
+    - /etc/systemd/system/openbao.service.d
+    - /etc/systemd/system/openbao-agent.service
+
+- name: Reload systemd after OpenBao replacement unit removal
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Set managed OpenBao replacement path list
+  ansible.builtin.set_fact:
+    openbao_replace_managed_remote_paths: >-
+      {{
+        [
+          openbao_config_dir,
+          openbao_raft_path,
+          openbao_log_dir,
+          openbao_package_cache_dir,
+          openbao_tls_dir,
+          openbao_seal_dir,
+          openbao_tls_cert_file,
+          openbao_tls_key_file,
+          openbao_managed_ca_cert_file,
+          openbao_static_unseal_key_path,
+          openbao_audit_log_file,
+          openbao_agent_config_dir,
+          openbao_agent_state_dir,
+          openbao_agent_bundle_path,
+          openbao_agent_bundle_template_path,
+          openbao_agent_config_file,
+          openbao_agent_role_id_path,
+          openbao_agent_secret_id_path,
+          openbao_agent_hook_path,
+          openbao_node_subca_bootstrap_artifact_dir,
+          openbao_node_subca_bootstrap_key_file,
+          openbao_node_subca_bootstrap_csr_file,
+          openbao_node_subca_bootstrap_leaf_file,
+          openbao_node_subca_bootstrap_fullchain_file
+        ]
+        + (
+          [openbao_node_subca_chain_file]
+          if (openbao_node_subca_chain_build_enabled | bool)
+          else []
+        )
+      }}
+    openbao_replace_preserved_operator_input_paths:
+      - "{{ openbao_node_bootstrap_tls_dir }}"
+      - "{{ openbao_node_bootstrap_tls_cert }}"
+      - "{{ openbao_node_bootstrap_tls_key }}"
+      - "{{ openbao_tls_trust_file }}"
+      - "{{ openbao_node_subca_cert_file }}"
+      - "{{ openbao_node_subca_key_file }}"
+      - "{{ openbao_node_subca_chain_issuer_path }}"
+      - "{{ '' if (openbao_node_subca_chain_build_enabled | bool) else openbao_node_subca_chain_file }}"
+
+- name: Assert managed OpenBao replacement paths are safe
+  ansible.builtin.assert:
+    that:
+      - openbao_replace_managed_path | length > 0
+      - item | string | trim is match('^/')
+      - openbao_replace_managed_path not in openbao_replace_unsafe_remote_paths
+    fail_msg: "Refusing to delete unsafe managed OpenBao path during replacement: {{ item }}."
+  vars:
+    openbao_replace_managed_path: "{{ item | string | trim | regex_replace('/+$', '') }}"
+    openbao_replace_unsafe_remote_paths:
+      - /
+      - /etc
+      - /var
+      - /usr
+      - /tmp
+      - /var/cache
+      - /var/lib
+      - /var/log
+      - /etc/systemd
+      - /etc/systemd/system
+      - /usr/local
+      - /usr/local/libexec
+  loop: "{{ openbao_replace_managed_remote_paths }}"
+
+- name: Assert uploaded TLS and CA input paths are preserved
+  ansible.builtin.assert:
+    that:
+      - >-
+        openbao_replace_preserved_input_path | length == 0
+        or openbao_replace_managed_path != openbao_replace_preserved_input_path
+      - >-
+        openbao_replace_preserved_input_path | length == 0
+        or not (
+          openbao_replace_preserved_input_path
+          is match('^' ~ (openbao_replace_managed_path | regex_escape) ~ '/')
+        )
+      - >-
+        openbao_replace_preserved_input_path | length == 0
+        or not (
+          openbao_replace_managed_path
+          is match('^' ~ (openbao_replace_preserved_input_path | regex_escape) ~ '/')
+        )
+    fail_msg: >-
+      Refusing to delete {{ item.0 }} because it would remove preserved
+      operator input {{ item.1 }}.
+  vars:
+    openbao_replace_managed_path: "{{ item.0 | string | trim | regex_replace('/+$', '') }}"
+    openbao_replace_preserved_input_path: "{{ item.1 | string | trim | regex_replace('/+$', '') }}"
+  loop: "{{ openbao_replace_managed_remote_paths | product(openbao_replace_preserved_operator_input_paths) | list }}"
+
+- name: Assert managed OpenBao data path is safe
+  ansible.builtin.assert:
+    that:
+      - openbao_replace_data_path | length > 0
+      - openbao_data_dir | string | trim is match('^/')
+      - openbao_replace_data_path not in openbao_replace_unsafe_remote_paths
+    fail_msg: "Refusing to clean unsafe OpenBao data path during replacement: {{ openbao_data_dir }}."
+  vars:
+    openbao_replace_data_path: "{{ openbao_data_dir | string | trim | regex_replace('/+$', '') }}"
+    openbao_replace_unsafe_remote_paths:
+      - /
+      - /etc
+      - /var
+      - /usr
+      - /tmp
+      - /var/cache
+      - /var/lib
+      - /var/log
+      - /etc/systemd
+      - /etc/systemd/system
+      - /usr/local
+      - /usr/local/libexec
+
+- name: Remove managed OpenBao data directory contents
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    tmpfile="$(mktemp)"
+    trap 'rm -f "${tmpfile}"' EXIT
+
+    if [[ ! -d "${OPENBAO_DATA_DIR}" ]]; then
+      printf '0\n'
+      exit 0
+    fi
+
+    if [[ "${OPENBAO_NATIVE_ACME_CACHE_PATH}" == "${OPENBAO_DATA_DIR}/"* ]]; then
+      relative_cache_path="${OPENBAO_NATIVE_ACME_CACHE_PATH#${OPENBAO_DATA_DIR}/}"
+      protected_data_child="${OPENBAO_DATA_DIR}/${relative_cache_path%%/*}"
+
+      if [[ -d "${protected_data_child}" ]]; then
+        find "${protected_data_child}" -mindepth 1 -print0 > "${tmpfile}"
+        find "${OPENBAO_DATA_DIR}" -mindepth 1 -maxdepth 1 \
+          ! -path "${protected_data_child}" -print0 >> "${tmpfile}"
+      else
+        find "${OPENBAO_DATA_DIR}" -mindepth 1 -maxdepth 1 \
+          -print0 > "${tmpfile}"
+      fi
+    else
+      find "${OPENBAO_DATA_DIR}" -mindepth 1 -maxdepth 1 \
+        -print0 > "${tmpfile}"
+    fi
+
+    entry_count="$(tr -cd '\000' < "${tmpfile}" | wc -c | tr -d ' ')"
+    printf '%s\n' "${entry_count}"
+
+    if [[ "${entry_count}" -gt 0 ]]; then
+      xargs -0 rm -rf -- < "${tmpfile}"
+    fi
+  args:
+    executable: /bin/bash
+  environment:
+    OPENBAO_DATA_DIR: "{{ openbao_data_dir | regex_replace('/+$', '') }}"
+    OPENBAO_NATIVE_ACME_CACHE_PATH: "{{ openbao_native_acme_cache_path | regex_replace('/+$', '') }}"
+  register: openbao_replace_data_cleanup
+  changed_when: openbao_replace_data_cleanup.stdout | int > 0
+  failed_when: openbao_replace_data_cleanup.rc != 0
+
+- name: Remove managed OpenBao replacement paths
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ openbao_replace_managed_remote_paths }}"

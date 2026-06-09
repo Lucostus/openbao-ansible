@@ -20,6 +20,19 @@
     - name: Assert OpenBao node connectivity
       ansible.builtin.import_tasks: ../roles/openbao_common/tasks/assert_cluster_reachable.yml
 
+- name: Replace existing OpenBao deployment when requested
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  pre_tasks:
+    - name: Load OpenBao variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
+  tasks:
+    - name: Replace existing OpenBao deployment
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/replace_existing.yml
+      when: openbao_replace_existing | bool
+
 - name: Disable OpenBao Agent when Agent renewal is not selected
   hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true

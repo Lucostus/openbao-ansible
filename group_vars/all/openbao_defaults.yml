@@ -2,6 +2,7 @@
 openbao_target_group: rhel10
 openbao_cluster_group: "{{ openbao_target_group }}"
 openbao_cluster_name: "{{ 'openbao-' ~ (openbao_cluster_group | regex_replace('^openbao-', '')) }}"
+openbao_replace_existing: false
 
 openbao_version: "2.5.3"
 openbao_release_arch: amd64

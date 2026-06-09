@@ -17,6 +17,14 @@
     - name: Load OpenBao variables
       ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
   tasks:
+    - name: Assert OpenBao replacement is not enabled for upgrade
+      ansible.builtin.assert:
+        that:
+          - not (openbao_replace_existing | bool)
+        fail_msg: >-
+          openbao_replace_existing is only supported through
+          playbooks/site.yml. Disable it before running playbooks/upgrade.yml.
+
     - name: Assert OpenBao node connectivity
       ansible.builtin.import_tasks: ../roles/openbao_common/tasks/assert_cluster_reachable.yml
 

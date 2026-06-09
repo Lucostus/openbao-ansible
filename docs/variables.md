@@ -7,6 +7,7 @@ target is `rhel10`; prod/test runs select `openbao-prod` or `openbao-test` with
 `openbao_target_group`.
 
 - `openbao_target_group`
+- `openbao_replace_existing`
 - `openbao_version`
 - `openbao_public_fqdn`
 - `openbao_public_api_addr`
@@ -81,6 +82,48 @@ Most low-level settings are in `group_vars/all/openbao_defaults.yml`, including:
 
 These are intended to be stable defaults. Override them only when the target
 environment requires it.
+
+## Replace Existing Deployment
+
+```yaml
+openbao_replace_existing: true
+```
+
+Run replacement through the site playbook:
+
+```bash
+ansible-playbook -i inventory/openbao.yml playbooks/site.yml \
+  -e openbao_target_group=openbao-prod
+```
+
+Every `playbooks/site.yml` run while `openbao_replace_existing` is true wipes
+and recreates the selected OpenBao cluster. The default is false, and operators
+should set it back to false unless repeated replacement is intentional.
+
+Replacement deletes the Ansible-managed OpenBao footprint:
+
+- remote OpenBao config, data, and Raft state
+- static seal material
+- installed listener TLS copies
+- logs and package cache
+- systemd units
+- OpenBao Agent config and state
+- generated node-subCA bootstrap output
+- the selected controller artifact directory `openbao_secure_artifacts_dir`,
+  including init JSON, static seal key artifacts, Agent AppRole artifacts,
+  generated self-signed certificates, and snapshots
+
+Replacement preserves external operator inputs and OS basics:
+
+- inventory, `group_vars`, and vaulted variables
+- uploaded bootstrap TLS source files
+- uploaded node sub-CA certificate/key material
+- issuer directories
+- `files/bootstrap-tls/`
+- installed packages
+- service user/group
+- firewalld rules
+- SELinux port rules
 
 ## Variable Name Validation
 

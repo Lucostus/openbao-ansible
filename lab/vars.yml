@@ -17,6 +17,11 @@ openbao_nodes:
 
 openbao_certificate_mode: bootstrap
 openbao_bootstrap_tls_source: controller
+openbao_bootstrap_tls_missing_strategy: generate_self_signed
+openbao_pki_signing_source: variable
+openbao_tls_trust_source: variable
+openbao_node_subca_chain_build_enabled: false
+openbao_node_subca_chain_issuer_path: ""
 openbao_pki_cluster_path: "https://{{ openbao_public_fqdn }}:8300/v1/{{ openbao_pki_mount }}"
 openbao_pki_cluster_aia_path: "{{ openbao_public_api_addr }}/v1/{{ openbao_pki_mount }}"
 openbao_native_acme_directory: "{{ openbao_pki_cluster_path }}/roles/{{ openbao_native_acme_role_name }}/acme/directory"
@@ -29,6 +34,7 @@ openbao_native_acme_cache_nfs_enabled: false
 openbao_native_acme_bootstrap_api_enabled: true
 openbao_native_acme_tls_alpn_routed: true
 
+openbao_manage_hosts_entries: true
 openbao_manage_firewalld: false
 openbao_manage_selinux: false
 openbao_systemd_hardening_enabled: false

@@ -205,6 +205,37 @@ Generated init output is stored under `secure-artifacts/` on the controller.
 Per-node OpenBao Agent AppRole artifacts are created there only when
 `openbao_certificate_mode` is `agent`.
 
+## Replace Existing Deployment
+
+To intentionally destroy and recreate the selected OpenBao deployment, set:
+
+```yaml
+openbao_replace_existing: true
+```
+
+Then run the site playbook for the target group:
+
+```bash
+ansible-playbook -i inventory/openbao.yml playbooks/site.yml \
+  -e openbao_target_group=openbao-prod
+```
+
+Every `playbooks/site.yml` run while `openbao_replace_existing` is true wipes
+and recreates the selected cluster. Leave it false unless repeated replacement
+is intentional.
+
+Replacement deletes the Ansible-managed OpenBao footprint: remote OpenBao
+config, data, Raft state, static seal material, installed listener TLS copies,
+logs, package cache, systemd units, Agent config/state, generated node-subCA
+bootstrap output, and the selected controller artifact directory
+`openbao_secure_artifacts_dir`, including init JSON, static seal key artifacts,
+Agent AppRole artifacts, generated self-signed certificates, and snapshots.
+
+Replacement preserves external operator inputs: inventory, `group_vars`,
+vaulted variables, uploaded bootstrap TLS source files, uploaded node sub-CA
+certificate/key material, issuer directories, `files/bootstrap-tls/`, installed
+packages, service user/group, firewalld rules, and SELinux port rules.
+
 ## Upgrade
 
 Change only `openbao_version`, then run:
