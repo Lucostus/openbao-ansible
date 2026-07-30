@@ -17,12 +17,15 @@
 !/README.md
 !/OPENBAO_ORIGINAL_PLAN.md
 !/AGENTS.md
+!/.specops.json
 !/files/
 !/files/**
 !/docs/
 !/docs/**
 !/lab/
 !/lab/**
+!/specs/
+!/specs/**
 !/inventory/docker-rhel10.ini
 
 /secure-artifacts/

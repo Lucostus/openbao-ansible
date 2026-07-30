@@ -1,0 +1,38 @@
+{
+  "specsDir": "specs",
+  "vertical": "infrastructure",
+  "team": {
+    "conventions": [],
+    "reviewRequired": false,
+    "taskTracking": "none",
+    "codeReview": {
+      "required": false,
+      "minApprovals": 1,
+      "requireTests": true
+    }
+  },
+  "implementation": {
+    "autoCommit": false,
+    "createPR": false,
+    "delegationThreshold": 4,
+    "validateReferences": "warn",
+    "gitCheckpointing": false,
+    "pipelineMaxCycles": 3,
+    "evaluation": {
+      "enabled": true,
+      "minScore": 7,
+      "maxIterations": 2,
+      "perTask": false,
+      "exerciseTests": true
+    }
+  },
+  "dependencySafety": {
+    "enabled": true,
+    "severityThreshold": "medium",
+    "autoFix": false,
+    "allowedAdvisories": [],
+    "scanScope": "spec"
+  },
+  "_installedVersion": "1.8.0",
+  "_installedAt": "2026-07-30T12:02:49Z"
+}

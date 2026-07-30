@@ -1,0 +1,43 @@
+{
+  "id": "2026-07-30-openbao-vector-opensearch-logging",
+  "title": "OpenBao Vector OpenSearch Logging",
+  "type": "feature",
+  "status": "draft",
+  "version": 1,
+  "author": {
+    "name": "lucostus",
+    "email": "constantin.winkler@gepardec.com"
+  },
+  "created": "2026-07-30T12:02:49Z",
+  "updated": "2026-07-30T12:02:49Z",
+  "specopsCreatedWith": "1.8.0",
+  "specopsUpdatedWith": "1.8.0",
+  "vertical": "infrastructure",
+  "specDependencies": [],
+  "relatedSpecs": [
+    {
+      "id": "2026-06-09-openbao-replace-strategy",
+      "relationship": "Related replacement cleanup behavior for managed runtime state."
+    }
+  ],
+  "affectedFiles": [
+    ".gitignore",
+    ".specops.json",
+    "group_vars/all/openbao_defaults.yml",
+    "playbooks/site.yml",
+    "playbooks/upgrade.yml",
+    "roles/openbao_common/tasks/preflight.yml",
+    "roles/openbao_common/tasks/replace_existing.yml",
+    "roles/openbao_common/tasks/validate_site.yml",
+    "roles/openbao_pki/tasks/configure_agent_identity.yml",
+    "roles/openbao_pki/tasks/main.yml",
+    "roles/openbao_agent/tasks/main.yml",
+    "roles/openbao_agent/templates/openbao-agent.hcl.j2",
+    "roles/openbao_agent/templates/openbao-agent.service.j2",
+    "roles/openbao_agent/templates/openbao-agent-listener-cert-hook.py.j2",
+    "roles/openbao_vector/",
+    "README.md",
+    "docs/variables.md",
+    "lab/"
+  ]
+}
