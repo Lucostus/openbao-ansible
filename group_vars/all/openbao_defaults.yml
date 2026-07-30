@@ -23,6 +23,7 @@ openbao_seal_dir: /etc/openbao.d/seal
 openbao_static_unseal_key_path: /etc/openbao.d/seal/current.key
 openbao_static_unseal_key_id: "initial-static-key"
 openbao_audit_log_file: /var/log/openbao/audit.log
+openbao_audit_log_mode: "0640"
 openbao_audit_enabled: true
 openbao_audit_description: OpenBao file audit device
 openbao_audit_log_raw: false
@@ -165,13 +166,59 @@ openbao_native_acme_eab_mac_key: ""
 openbao_native_acme_http_routed: false
 openbao_native_acme_tls_alpn_routed: false
 
-openbao_agent_enabled: "{{ openbao_certificate_mode == 'agent' }}"
+openbao_vector_enabled: false
+openbao_vector_package_name: vector
+openbao_vector_service_name: vector
+openbao_vector_service_user: vector
+openbao_vector_service_group: vector
+openbao_vector_config_dir: /etc/vector
+openbao_vector_config_file: "{{ openbao_vector_config_dir }}/vector.yaml"
+openbao_vector_data_dir: /var/lib/vector
+openbao_vector_secret_dir: "{{ openbao_vector_config_dir }}/openbao-secrets"
+openbao_vector_secret_backend_name: openbao_vector
+openbao_vector_secret_source: openbao_agent
+openbao_vector_collect_audit: true
+openbao_vector_collect_journald: true
+openbao_vector_audit_read_from: beginning
+openbao_vector_journald_units:
+  - openbao.service
+  - openbao-agent.service
+openbao_vector_opensearch_endpoints: []
+openbao_vector_opensearch_service_type: managed
+openbao_vector_opensearch_index: "openbao-{{ openbao_cluster_name }}-%Y.%m.%d"
+openbao_vector_opensearch_auth_strategy: basic
+openbao_vector_opensearch_secret_mount: secret
+openbao_vector_opensearch_secret_path: observability/opensearch/openbao-vector
+openbao_vector_opensearch_kv2_data_path: "{{ openbao_vector_opensearch_secret_mount }}/data/{{ openbao_vector_opensearch_secret_path }}"
+openbao_vector_opensearch_username_field: username
+openbao_vector_opensearch_password_field: password
+openbao_vector_opensearch_username_file: "{{ openbao_vector_secret_dir }}/username"
+openbao_vector_opensearch_password_file: "{{ openbao_vector_secret_dir }}/password"
+openbao_vector_opensearch_tls_ca_file: ""
+openbao_vector_validate_sink_health: false
+openbao_vector_seed_opensearch_secret: false
+openbao_vector_opensearch_secret_data: {}
+
+openbao_agent_listener_cert_enabled: "{{ openbao_certificate_mode == 'agent' }}"
+openbao_agent_vector_secret_enabled: >-
+  {{
+    openbao_vector_enabled | bool
+    and openbao_vector_secret_source == 'openbao_agent'
+  }}
+openbao_agent_enabled: >-
+  {{
+    openbao_agent_listener_cert_enabled | bool
+    or openbao_agent_vector_secret_enabled | bool
+  }}
 openbao_agent_config_dir: /etc/openbao-agent.d
 openbao_agent_state_dir: /var/lib/openbao-agent
 openbao_agent_bundle_path: "{{ openbao_agent_state_dir }}/listener-bundle.pem"
 openbao_agent_bundle_template_path: "{{ openbao_agent_config_dir }}/listener-bundle.ctmpl"
 openbao_agent_config_file: "{{ openbao_agent_config_dir }}/openbao-agent.hcl"
 openbao_agent_hook_path: /usr/local/libexec/openbao-agent-listener-cert-hook
+openbao_agent_vector_secret_hook_path: /usr/local/libexec/openbao-agent-vector-secret-hook
+openbao_agent_vector_username_template_path: "{{ openbao_agent_config_dir }}/vector-opensearch-username.ctmpl"
+openbao_agent_vector_password_template_path: "{{ openbao_agent_config_dir }}/vector-opensearch-password.ctmpl"
 openbao_agent_vault_addr: "{{ openbao_cli_addr }}"
 openbao_agent_auth_mount: approle
 openbao_agent_role_id_path: "{{ openbao_agent_config_dir }}/role_id"

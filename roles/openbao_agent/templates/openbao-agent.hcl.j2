@@ -24,6 +24,7 @@ template_config {
   exit_on_retry_failure = true
 }
 
+{% if openbao_agent_listener_cert_enabled | bool %}
 template {
   source = "{{ openbao_agent_bundle_template_path }}"
   destination = "{{ openbao_agent_bundle_path }}"
@@ -35,3 +36,32 @@ template {
     timeout = "{{ openbao_agent_template_command_timeout }}"
   }
 }
+{% endif %}
+{% if openbao_agent_vector_secret_enabled | bool %}
+
+template {
+  source = "{{ openbao_agent_vector_username_template_path }}"
+  destination = "{{ openbao_vector_opensearch_username_file }}"
+  perms = "0640"
+  backup = false
+  error_on_missing_key = true
+
+  exec {
+    command = ["{{ openbao_agent_vector_secret_hook_path }}"]
+    timeout = "{{ openbao_agent_template_command_timeout }}"
+  }
+}
+
+template {
+  source = "{{ openbao_agent_vector_password_template_path }}"
+  destination = "{{ openbao_vector_opensearch_password_file }}"
+  perms = "0640"
+  backup = false
+  error_on_missing_key = true
+
+  exec {
+    command = ["{{ openbao_agent_vector_secret_hook_path }}"]
+    timeout = "{{ openbao_agent_template_command_timeout }}"
+  }
+}
+{% endif %}

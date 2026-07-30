@@ -93,4 +93,4 @@
     state: file
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
-    mode: "0640"
+    mode: "{{ openbao_audit_log_mode }}"

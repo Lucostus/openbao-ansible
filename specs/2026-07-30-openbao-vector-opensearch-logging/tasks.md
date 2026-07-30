@@ -2,8 +2,8 @@
 
 ## Task 1: Defaults And Validation
 
-**Status:** Pending  
-**Priority:** High  
+**Status:** Completed
+**Priority:** High
 **IssueID:** None
 
 **Description:** Add the Vector variable surface and validate it early.
@@ -23,15 +23,15 @@
 
 **Acceptance Criteria:**
 
-- [ ] `openbao_vector_enabled=false` keeps current behavior unchanged.
-- [ ] Invalid Vector settings fail before package or service changes.
-- [ ] Bootstrap certificate mode plus Vector no longer fails solely because
+- [x] `openbao_vector_enabled=false` keeps current behavior unchanged.
+- [x] Invalid Vector settings fail before package or service changes.
+- [x] Bootstrap certificate mode plus Vector no longer fails solely because
   OpenBao Agent is enabled for non-certificate templates.
 
 ## Task 2: Reusable OpenBao Agent Identity
 
-**Status:** Pending  
-**Priority:** High  
+**Status:** Completed
+**Priority:** High
 **IssueID:** None
 
 **Description:** Move per-node OpenBao Agent AppRole creation out of the PKI
@@ -53,15 +53,15 @@ rendering.
 
 **Acceptance Criteria:**
 
-- [ ] Agent AppRole artifacts are created for Vector-only Agent use.
-- [ ] Existing listener certificate renewal AppRole behavior is preserved.
-- [ ] A stale artifact is regenerated when policy fragments or Vector secret
+- [x] Agent AppRole artifacts are created for Vector-only Agent use.
+- [x] Existing listener certificate renewal AppRole behavior is preserved.
+- [x] A stale artifact is regenerated when policy fragments or Vector secret
   coordinates change.
 
 ## Task 3: OpenBao Agent Template Refactor
 
-**Status:** Pending  
-**Priority:** High  
+**Status:** Completed
+**Priority:** High
 **IssueID:** None
 
 **Description:** Generalize `roles/openbao_agent` so one Agent service can
@@ -83,15 +83,15 @@ render listener certificates, Vector secrets, or both.
 
 **Acceptance Criteria:**
 
-- [ ] Vector-only Agent mode starts without listener certificate bundle waits.
-- [ ] Certificate-renewal Agent mode still validates listener cert names.
-- [ ] Agent renders OpenSearch username/password files with restrictive
+- [x] Vector-only Agent mode starts without listener certificate bundle waits.
+- [x] Certificate-renewal Agent mode still validates listener cert names.
+- [x] Agent renders OpenSearch username/password files with restrictive
   permissions.
 
 ## Task 4: Vector Role
 
-**Status:** Pending  
-**Priority:** High  
+**Status:** Completed
+**Priority:** High
 **IssueID:** None
 
 **Description:** Add `roles/openbao_vector` to install, configure, validate,
@@ -111,15 +111,15 @@ and start Vector.
 
 **Acceptance Criteria:**
 
-- [ ] Vector can read `/var/log/openbao/audit.log` without running as root.
-- [ ] Vector config contains `SECRET[...]` references instead of plaintext
+- [x] Vector can read `/var/log/openbao/audit.log` without running as root.
+- [x] Vector config contains `SECRET[...]` references instead of plaintext
   credentials.
-- [ ] Vector service starts only after required secret files exist.
+- [x] Vector service starts only after required secret files exist.
 
 ## Task 5: Playbook And Replacement Wiring
 
-**Status:** Pending  
-**Priority:** Medium  
+**Status:** Completed
+**Priority:** Medium
 **IssueID:** None
 
 **Description:** Wire Vector into `site.yml` and replacement cleanup.
@@ -137,16 +137,16 @@ and start Vector.
 
 **Acceptance Criteria:**
 
-- [ ] `site.yml` converges OpenBao plus Vector when enabled.
-- [ ] `upgrade.yml` remains a rolling OpenBao upgrade path, not a Vector
+- [x] `site.yml` converges OpenBao plus Vector when enabled.
+- [x] `upgrade.yml` remains a rolling OpenBao upgrade path, not a Vector
   configuration entry point.
-- [ ] Replacement removes managed Vector runtime state and leaves packages
+- [x] Replacement removes managed Vector runtime state and leaves packages
   installed.
 
 ## Task 6: Optional Secret Seeding
 
-**Status:** Pending  
-**Priority:** Medium  
+**Status:** Completed
+**Priority:** Medium
 **IssueID:** None
 
 **Description:** Support repeatable lab/replacement runs by optionally writing
@@ -163,14 +163,14 @@ the OpenSearch credential secret into OpenBao from vaulted values.
 
 **Acceptance Criteria:**
 
-- [ ] Missing secret data fails clearly when seeding is requested.
-- [ ] Secret values never appear in Ansible output.
-- [ ] Replacement plus seeding can recreate a working lab pipeline.
+- [x] Missing secret data fails clearly when seeding is requested.
+- [x] Secret values never appear in Ansible output.
+- [x] Replacement plus seeding can recreate a working lab pipeline.
 
 ## Task 7: Documentation
 
-**Status:** Pending  
-**Priority:** Medium  
+**Status:** Completed
+**Priority:** Medium
 **IssueID:** None
 
 **Description:** Document the feature and its security/operations model.
@@ -185,15 +185,15 @@ the OpenSearch credential secret into OpenBao from vaulted values.
 
 **Acceptance Criteria:**
 
-- [ ] Operators can follow README steps to enable Vector.
-- [ ] Variable docs identify defaults, required values, and secret handling.
-- [ ] Replacement docs explain that OpenBao-stored Vector credentials are
+- [x] Operators can follow README steps to enable Vector.
+- [x] Variable docs identify defaults, required values, and secret handling.
+- [x] Replacement docs explain that OpenBao-stored Vector credentials are
   deleted when the cluster is recreated.
 
 ## Task 8: Lab And Static Validation
 
-**Status:** Pending  
-**Priority:** High  
+**Status:** Completed
+**Priority:** High
 **IssueID:** None
 
 **Description:** Prove default behavior, Vector enablement, replacement, and
@@ -210,9 +210,8 @@ OpenSearch ingestion.
 
 **Acceptance Criteria:**
 
-- [ ] Static validation passes.
-- [ ] Default lab behavior still passes with Vector disabled.
-- [ ] Vector-enabled lab run forwards audit and service events to OpenSearch.
-- [ ] Repeated replacement with Vector enabled and seeded secrets finishes
+- [x] Static validation passes.
+- [x] Default lab behavior still passes with Vector disabled.
+- [x] Vector-enabled lab run forwards audit and service events to OpenSearch.
+- [x] Repeated replacement with Vector enabled and seeded secrets finishes
   healthy.
-

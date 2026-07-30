@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenBao agent for listener certificate renewal
+Description=OpenBao agent for managed templates
 Documentation=https://openbao.org/docs/
 After=network-online.target openbao.service
 Wants=network-online.target openbao.service
@@ -18,7 +18,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths={{ openbao_agent_config_dir }} {{ openbao_agent_state_dir }} {{ openbao_tls_dir }} /run /var/run
+ReadWritePaths={{ ([openbao_agent_config_dir, openbao_agent_state_dir, '/run', '/var/run'] + ([openbao_tls_dir] if openbao_agent_listener_cert_enabled | bool else []) + ([openbao_vector_secret_dir] if openbao_agent_vector_secret_enabled | bool else [])) | join(' ') }}
 LockPersonality=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

@@ -6,6 +6,7 @@ RUN dnf -y install \
       findutils \
       hostname \
       iproute \
+      curl \
       openssh-server \
       openssl \
       procps-ng \
@@ -15,6 +16,10 @@ RUN dnf -y install \
       sudo \
       util-linux-core \
     && dnf clean all
+
+RUN curl -fsSL https://keys.datadoghq.com/DATADOG_RPM_KEY_B01082D3.public -o /tmp/datadog-rpm-key.public \
+    && rpm --import /tmp/datadog-rpm-key.public \
+    && rm -f /tmp/datadog-rpm-key.public
 
 RUN groupadd --gid 10001 openbao \
     && useradd --uid 10001 --gid openbao --home-dir /var/lib/openbao --shell /sbin/nologin --no-create-home openbao \

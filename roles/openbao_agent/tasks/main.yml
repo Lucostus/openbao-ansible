@@ -10,7 +10,9 @@
   ansible.builtin.assert:
     that:
       - openbao_agent_approle_artifact_stat.stat.exists | default(false)
-    fail_msg: "Missing {{ openbao_agent_approle_artifact }}. Run OpenBao PKI setup before converging agent."
+    fail_msg: >-
+      Missing {{ openbao_agent_approle_artifact }}. Run playbooks/site.yml to
+      create Agent identity artifacts before converging openbao-agent.
 
 - name: Read OpenBao agent AppRole artifact
   ansible.builtin.slurp:
@@ -30,6 +32,43 @@
           'ip_sans': openbao_agent_cert_ip_sans | default([]) | unique | list
         } | to_json | hash('sha256')
       }}
+    openbao_agent_expected_identity_policy_fingerprint: >-
+      {{
+        {
+          'listener_cert_enabled': openbao_agent_listener_cert_enabled | bool,
+          'vector_secret_enabled': openbao_agent_vector_secret_enabled | bool,
+          'cert_dns_names': (
+            openbao_agent_cert_dns_names | unique | list
+            if openbao_agent_listener_cert_enabled | bool
+            else []
+          ),
+          'cert_ip_sans': (
+            openbao_agent_cert_ip_sans | default([]) | unique | list
+            if openbao_agent_listener_cert_enabled | bool
+            else []
+          ),
+          'vector_secret_mount': (
+            openbao_vector_opensearch_secret_mount
+            if openbao_agent_vector_secret_enabled | bool
+            else ''
+          ),
+          'vector_secret_path': (
+            openbao_vector_opensearch_secret_path
+            if openbao_agent_vector_secret_enabled | bool
+            else ''
+          ),
+          'vector_username_field': (
+            openbao_vector_opensearch_username_field
+            if openbao_agent_vector_secret_enabled | bool
+            else ''
+          ),
+          'vector_password_field': (
+            openbao_vector_opensearch_password_field
+            if openbao_agent_vector_secret_enabled | bool
+            else ''
+          )
+        } | to_json | hash('sha256')
+      }}
   no_log: true
 
 - name: Assert OpenBao agent AppRole artifact matches this host
@@ -41,7 +80,12 @@
       - (openbao_agent_approle_artifact_data.policy_name | default('')) == openbao_agent_policy_name
       - (openbao_agent_approle_artifact_data.role_id | default('')) | length > 0
       - (openbao_agent_approle_artifact_data.secret_id | default('')) | length > 0
-      - (openbao_agent_approle_artifact_data.cert_name_fingerprint | default('')) == openbao_agent_expected_cert_name_fingerprint
+      - (openbao_agent_approle_artifact_data.listener_cert_enabled | default(false) | bool) == (openbao_agent_listener_cert_enabled | bool)
+      - (openbao_agent_approle_artifact_data.vector_secret_enabled | default(false) | bool) == (openbao_agent_vector_secret_enabled | bool)
+      - (openbao_agent_approle_artifact_data.identity_policy_fingerprint | default('')) == openbao_agent_expected_identity_policy_fingerprint
+      - >-
+        not (openbao_agent_listener_cert_enabled | bool)
+        or (openbao_agent_approle_artifact_data.cert_name_fingerprint | default('')) == openbao_agent_expected_cert_name_fingerprint
     fail_msg: "{{ openbao_agent_approle_artifact }} is stale or does not match {{ inventory_hostname }}."
 
 - name: Ensure OpenBao agent directories exist
@@ -55,6 +99,11 @@
     - { path: "{{ openbao_agent_config_dir }}", mode: "0700" }
     - { path: "{{ openbao_agent_state_dir }}", mode: "0700" }
     - { path: "{{ openbao_agent_hook_path | dirname }}", mode: "0755" }
+    - { path: "{{ openbao_agent_vector_secret_hook_path | dirname }}", mode: "0755" }
+    - { path: "{{ openbao_vector_secret_dir }}", mode: "0750" }
+  when: >-
+    item.path != openbao_vector_secret_dir
+    or openbao_agent_vector_secret_enabled | bool
 
 - name: Install OpenBao agent role ID
   ansible.builtin.copy:
@@ -84,6 +133,24 @@
     group: root
     mode: "0640"
   notify: Restart OpenBao agent
+  when: openbao_agent_listener_cert_enabled | bool
+
+- name: Install OpenBao agent Vector secret templates
+  ansible.builtin.template:
+    src: vector-secret.ctmpl.j2
+    dest: "{{ item.template_path }}"
+    owner: root
+    group: root
+    mode: "0640"
+  loop:
+    - template_path: "{{ openbao_agent_vector_username_template_path }}"
+      secret_field: "{{ openbao_vector_opensearch_username_field }}"
+    - template_path: "{{ openbao_agent_vector_password_template_path }}"
+      secret_field: "{{ openbao_vector_opensearch_password_field }}"
+  vars:
+    openbao_agent_vector_secret_field: "{{ item.secret_field }}"
+  notify: Restart OpenBao agent
+  when: openbao_agent_vector_secret_enabled | bool
 
 - name: Install OpenBao agent configuration
   ansible.builtin.template:
@@ -102,6 +169,17 @@
     group: root
     mode: "0750"
   notify: Restart OpenBao agent
+  when: openbao_agent_listener_cert_enabled | bool
+
+- name: Install OpenBao agent Vector secret hook
+  ansible.builtin.template:
+    src: openbao-agent-vector-secret-hook.sh.j2
+    dest: "{{ openbao_agent_vector_secret_hook_path }}"
+    owner: root
+    group: root
+    mode: "0750"
+  notify: Restart OpenBao agent
+  when: openbao_agent_vector_secret_enabled | bool
 
 - name: Install OpenBao agent systemd unit
   ansible.builtin.template:
@@ -134,18 +212,46 @@
   until: openbao_agent_bundle_wait.rc == 0
   retries: 24
   delay: 5
+  when: openbao_agent_listener_cert_enabled | bool
+
+- name: Wait for OpenBao agent Vector secret files
+  ansible.builtin.command:
+    argv:
+      - test
+      - -s
+      - "{{ item }}"
+  loop:
+    - "{{ openbao_vector_opensearch_username_file }}"
+    - "{{ openbao_vector_opensearch_password_file }}"
+  register: openbao_agent_vector_secret_wait
+  changed_when: false
+  until: openbao_agent_vector_secret_wait.rc == 0
+  retries: 24
+  delay: 5
+  no_log: true
+  when: openbao_agent_vector_secret_enabled | bool
+
+- name: Reconcile OpenBao agent Vector secret file permissions
+  ansible.builtin.command:
+    argv:
+      - "{{ openbao_agent_vector_secret_hook_path }}"
+  changed_when: false
+  no_log: true
+  when: openbao_agent_vector_secret_enabled | bool
 
 - name: Reconcile OpenBao listener certificate from agent bundle
   ansible.builtin.command:
     argv:
       - "{{ openbao_agent_hook_path }}"
   changed_when: false
+  when: openbao_agent_listener_cert_enabled | bool
 
 - name: Wait for OpenBao listener after agent certificate convergence
   ansible.builtin.wait_for:
     host: "{{ openbao_node_fqdn }}"
     port: "{{ openbao_listener_port }}"
     timeout: 180
+  when: openbao_agent_listener_cert_enabled | bool
 
 - name: Validate OpenBao agent-managed listener certificate names
   ansible.builtin.shell: >-
@@ -163,8 +269,9 @@
   until: openbao_agent_cert_check.rc == 0
   retries: 12
   delay: 10
+  when: openbao_agent_listener_cert_enabled | bool
 
-- name: Wait for OpenBao health after agent certificate convergence
+- name: Wait for OpenBao health after agent convergence
   ansible.builtin.command: bao status -format=json
   environment:
     BAO_ADDR: "{{ openbao_cli_addr }}"

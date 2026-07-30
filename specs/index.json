@@ -2,12 +2,12 @@
   {
     "id": "2026-07-30-openbao-vector-opensearch-logging",
     "type": "feature",
-    "status": "draft",
+    "status": "completed",
     "version": 1,
     "author": {
       "name": "lucostus",
       "email": "constantin.winkler@gepardec.com"
     },
-    "updated": "2026-07-30T12:02:49Z"
+    "updated": "2026-07-30T13:12:18Z"
   }
 ]

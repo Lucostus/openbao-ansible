@@ -1,0 +1,81 @@
+data_dir: {{ openbao_vector_data_dir | to_json }}
+
+secret:
+  {{ openbao_vector_secret_backend_name }}:
+    type: directory
+    path: {{ openbao_vector_secret_dir | to_json }}
+    remove_trailing_whitespace: true
+
+sources:
+{% if openbao_vector_collect_audit | bool %}
+  openbao_audit:
+    type: file
+    include:
+      - {{ openbao_audit_log_file | to_json }}
+      - {{ (openbao_audit_log_file ~ ".*") | to_json }}
+    read_from: {{ openbao_vector_audit_read_from | to_json }}
+{% endif %}
+{% if openbao_vector_collect_journald | bool %}
+  openbao_journal:
+    type: journald
+    include_units:
+{% for openbao_vector_journald_unit in openbao_vector_journald_units %}
+      - {{ openbao_vector_journald_unit | to_json }}
+{% endfor %}
+{% endif %}
+
+transforms:
+{% if openbao_vector_collect_audit | bool %}
+  openbao_audit_shape:
+    type: remap
+    inputs:
+      - openbao_audit
+    source: |-
+      parsed = parse_json(.message) ?? {}
+      .openbao_audit = parsed
+      .openbao_cluster = {{ openbao_cluster_name | to_json }}
+      .openbao_node = {{ inventory_hostname | to_json }}
+      .openbao_log_type = "audit"
+      .openbao_audit_file = to_string(.file) ?? {{ openbao_audit_log_file | to_json }}
+{% endif %}
+{% if openbao_vector_collect_journald | bool %}
+  openbao_journal_shape:
+    type: remap
+    inputs:
+      - openbao_journal
+    source: |-
+      .openbao_cluster = {{ openbao_cluster_name | to_json }}
+      .openbao_node = {{ inventory_hostname | to_json }}
+      .openbao_log_type = "service"
+      .openbao_systemd_unit = to_string(._SYSTEMD_UNIT) ?? ""
+{% endif %}
+
+sinks:
+  opensearch:
+    type: elasticsearch
+    inputs:
+{% if openbao_vector_collect_audit | bool %}
+      - openbao_audit_shape
+{% endif %}
+{% if openbao_vector_collect_journald | bool %}
+      - openbao_journal_shape
+{% endif %}
+    endpoints:
+{% for openbao_vector_opensearch_endpoint in openbao_vector_opensearch_endpoints %}
+      - {{ openbao_vector_opensearch_endpoint | to_json }}
+{% endfor %}
+    api_version: v8
+    opensearch_service_type: {{ openbao_vector_opensearch_service_type | to_json }}
+    mode: bulk
+    healthcheck:
+      enabled: {{ openbao_vector_validate_sink_health | bool | lower }}
+    bulk:
+      index: {{ openbao_vector_opensearch_index | to_json }}
+    auth:
+      strategy: basic
+      user: "SECRET[{{ openbao_vector_secret_backend_name }}.username]"
+      password: "SECRET[{{ openbao_vector_secret_backend_name }}.password]"
+{% if openbao_vector_opensearch_tls_ca_file | length > 0 %}
+    tls:
+      ca_file: {{ openbao_vector_opensearch_tls_ca_file | to_json }}
+{% endif %}

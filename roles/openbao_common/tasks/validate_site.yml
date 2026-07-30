@@ -68,19 +68,39 @@
           'not-found'
         )
       }}
+    openbao_site_vector_service_state: >-
+      {{
+        (ansible_facts.services.get(openbao_vector_service_name ~ '.service', {})).get(
+          'state',
+          'not-found'
+        )
+      }}
 
-- name: Assert OpenBao agent is active in Agent mode
+- name: Assert OpenBao agent is active when Agent-backed features are enabled
   ansible.builtin.assert:
     that:
       - openbao_site_agent_service_state == 'running'
-    fail_msg: "openbao-agent must be active when openbao_certificate_mode=agent."
+    fail_msg: "openbao-agent must be active when Agent-backed features are enabled."
   when: openbao_agent_enabled | bool
 
-- name: Assert OpenBao agent is inactive outside Agent mode
+- name: Assert OpenBao agent is inactive when Agent-backed features are disabled
   ansible.builtin.assert:
     that:
       - openbao_site_agent_service_state != 'running'
     fail_msg: >-
-      openbao-agent must not be active when openbao_certificate_mode={{
-      openbao_certificate_mode }}.
+      openbao-agent must not be active when Agent-backed features are disabled.
   when: not (openbao_agent_enabled | bool)
+
+- name: Assert Vector is active when log forwarding is enabled
+  ansible.builtin.assert:
+    that:
+      - openbao_site_vector_service_state == 'running'
+    fail_msg: "vector must be active when openbao_vector_enabled=true."
+  when: openbao_vector_enabled | bool
+
+- name: Assert Vector is inactive when log forwarding is disabled
+  ansible.builtin.assert:
+    that:
+      - openbao_site_vector_service_state != 'running'
+    fail_msg: "vector must not be active when openbao_vector_enabled=false."
+  when: not (openbao_vector_enabled | bool)

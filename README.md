@@ -202,8 +202,57 @@ ansible-playbook -i inventory/openbao.yml playbooks/site.yml \
 ```
 
 Generated init output is stored under `secure-artifacts/` on the controller.
-Per-node OpenBao Agent AppRole artifacts are created there only when
-`openbao_certificate_mode` is `agent`.
+Per-node OpenBao Agent AppRole artifacts are created there when Agent-backed
+features are enabled, such as certificate renewal or Vector secret rendering.
+
+## Vector Log Forwarding
+
+Vector forwarding is disabled by default. When enabled, each OpenBao node
+collects the OpenBao file audit log and selected systemd journal units, then
+ships them to OpenSearch through Vector's Elasticsearch sink in OpenSearch
+mode. The target hosts must already have a trusted package source that provides
+the `vector` package, or `openbao_vector_package_name` must point at an
+approved RPM URL. The managed OpenBao audit log file mode defaults to `0640` so
+the Vector service user can read it through the OpenBao group.
+
+Store the OpenSearch credentials in OpenBao KV v2:
+
+```bash
+bao secrets enable -path=secret kv-v2
+bao kv put -mount=secret observability/opensearch/openbao-vector \
+  username=openbao-vector \
+  password='change-me'
+```
+
+Then enable forwarding:
+
+```yaml
+openbao_vector_enabled: true
+openbao_vector_opensearch_endpoints:
+  - https://opensearch.example.com:9200
+openbao_vector_opensearch_secret_mount: secret
+openbao_vector_opensearch_secret_path: observability/opensearch/openbao-vector
+```
+
+`playbooks/site.yml` creates per-node AppRole identities for OpenBao Agent.
+Agent renders the OpenSearch username and password into root-owned files under
+`/etc/vector/openbao-secrets`, and Vector references those files with
+`SECRET[...]` placeholders. The Vector config does not contain plaintext
+credentials.
+
+For repeatable lab or replacement runs, the secret can be seeded from vaulted
+Ansible data:
+
+```yaml
+openbao_vector_seed_opensearch_secret: true
+openbao_vector_opensearch_secret_data:
+  username: openbao-vector
+  password: "{{ vaulted_openbao_vector_opensearch_password }}"
+```
+
+Keep seed values in an encrypted vault or lab-only extra vars. Replacement
+recreates OpenBao from scratch, so any OpenBao-stored Vector credential secret
+is deleted unless it is seeded again or recreated manually.
 
 ## Replace Existing Deployment
 
@@ -227,9 +276,12 @@ is intentional.
 Replacement deletes the Ansible-managed OpenBao footprint: remote OpenBao
 config, data, Raft state, static seal material, installed listener TLS copies,
 logs, package cache, systemd units, Agent config/state, generated node-subCA
-bootstrap output, and the selected controller artifact directory
-`openbao_secure_artifacts_dir`, including init JSON, static seal key artifacts,
-Agent AppRole artifacts, generated self-signed certificates, and snapshots.
+bootstrap output, managed Vector config/state/rendered secrets, and the
+selected controller artifact directory `openbao_secure_artifacts_dir`,
+including init JSON, static seal key artifacts, Agent AppRole artifacts,
+generated self-signed certificates, and snapshots. OpenBao-stored secrets, such
+as the Vector OpenSearch credential secret, are part of the recreated OpenBao
+data and are deleted.
 
 Replacement preserves external operator inputs: inventory, `group_vars`,
 vaulted variables, uploaded bootstrap TLS source files, uploaded node sub-CA

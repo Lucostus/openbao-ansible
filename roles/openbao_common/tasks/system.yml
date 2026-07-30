@@ -86,7 +86,7 @@
     state: touch
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
-    mode: "0640"
+    mode: "{{ openbao_audit_log_mode }}"
   when: not openbao_audit_log_file_stat.stat.exists
 
 - name: Set audit log file permissions
@@ -95,7 +95,7 @@
     state: file
     owner: "{{ openbao_service_user }}"
     group: "{{ openbao_service_group }}"
-    mode: "0640"
+    mode: "{{ openbao_audit_log_mode }}"
 
 - name: Add OpenBao peer host entries
   ansible.builtin.import_tasks: hosts_entries.yml

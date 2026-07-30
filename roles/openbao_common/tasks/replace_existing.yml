@@ -87,6 +87,13 @@
 - name: Gather service facts for OpenBao replacement
   ansible.builtin.service_facts:
 
+- name: Stop and disable Vector during replacement
+  ansible.builtin.systemd:
+    name: "{{ openbao_vector_service_name }}"
+    enabled: false
+    state: stopped
+  when: "(openbao_vector_service_name ~ '.service') in ansible_facts.services"
+
 - name: Stop and disable OpenBao agent during replacement
   ansible.builtin.systemd:
     name: openbao-agent
@@ -138,6 +145,14 @@
           openbao_agent_role_id_path,
           openbao_agent_secret_id_path,
           openbao_agent_hook_path,
+          openbao_agent_vector_secret_hook_path,
+          openbao_agent_vector_username_template_path,
+          openbao_agent_vector_password_template_path,
+          openbao_vector_config_file,
+          openbao_vector_data_dir,
+          openbao_vector_secret_dir,
+          openbao_vector_opensearch_username_file,
+          openbao_vector_opensearch_password_file,
           openbao_node_subca_bootstrap_artifact_dir,
           openbao_node_subca_bootstrap_key_file,
           openbao_node_subca_bootstrap_csr_file,

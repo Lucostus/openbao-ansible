@@ -107,6 +107,26 @@ services:
       - rhel10-ansible-2
       - rhel10-ansible-3
 
+  opensearch-mock:
+    build:
+      context: ./docker/openbao-lab-node
+    image: openbao-lab-opensearch-mock:latest
+    platform: linux/arm64
+    command: python3 /opt/opensearch-mock/server.py
+    environment:
+      OPENSEARCH_MOCK_USERNAME: openbao-vector
+      OPENSEARCH_MOCK_PASSWORD: lab-password
+    ports:
+      - "127.0.0.1:19200:9200"
+    volumes:
+      - ./docker/opensearch-mock/server.py:/opt/opensearch-mock/server.py:ro
+      - opensearch-mock-data:/var/lib/opensearch-mock
+    networks:
+      openbao_lab:
+        ipv4_address: 10.89.10.20
+        aliases:
+          - opensearch.lab.local
+
 networks:
   openbao_lab:
     driver: bridge
@@ -119,3 +139,4 @@ volumes:
   rhel10-ansible-2-data:
   rhel10-ansible-3-data:
   openbao-acme-cache:
+  opensearch-mock-data:

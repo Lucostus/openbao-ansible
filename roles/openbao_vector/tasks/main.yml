@@ -1,0 +1,136 @@
+---
+- name: Install Vector package
+  ansible.builtin.dnf:
+    name: "{{ openbao_vector_package_name }}"
+    state: present
+
+- name: Check for systemd journal group
+  ansible.builtin.getent:
+    database: group
+    key: systemd-journal
+  register: openbao_vector_systemd_journal_group
+  failed_when: false
+  when: openbao_vector_collect_journald | bool
+
+- name: Ensure Vector user can read OpenBao logs
+  ansible.builtin.user:
+    name: "{{ openbao_vector_service_user }}"
+    groups: "{{ openbao_vector_supplemental_groups }}"
+    append: true
+  vars:
+    openbao_vector_supplemental_groups: >-
+      {{
+        [openbao_service_group]
+        + (
+          ['systemd-journal']
+          if (
+            openbao_vector_collect_journald | bool
+            and not (openbao_vector_systemd_journal_group.failed | default(false))
+          )
+          else []
+        )
+      }}
+  notify: Restart Vector
+
+- name: Reconcile OpenBao audit log permissions for Vector
+  ansible.builtin.file:
+    path: "{{ openbao_audit_log_file }}"
+    state: file
+    owner: "{{ openbao_service_user }}"
+    group: "{{ openbao_service_group }}"
+    mode: "{{ openbao_audit_log_mode }}"
+  when: openbao_vector_collect_audit | bool
+
+- name: Assert Vector user can read the OpenBao audit log
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - "{{ openbao_vector_service_user }}"
+      - --
+      - test
+      - -r
+      - "{{ openbao_audit_log_file }}"
+  register: openbao_vector_audit_log_readable
+  changed_when: false
+  failed_when: openbao_vector_audit_log_readable.rc != 0
+  when: openbao_vector_collect_audit | bool
+
+- name: Ensure Vector directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ openbao_vector_config_dir }}"
+      owner: root
+      group: root
+      mode: "0755"
+    - path: "{{ openbao_vector_data_dir }}"
+      owner: "{{ openbao_vector_service_user }}"
+      group: "{{ openbao_vector_service_group }}"
+      mode: "0750"
+    - path: "{{ openbao_vector_secret_dir }}"
+      owner: root
+      group: "{{ openbao_vector_service_group }}"
+      mode: "0750"
+
+- name: Wait for OpenBao Agent-rendered Vector secrets
+  ansible.builtin.command:
+    argv:
+      - test
+      - -s
+      - "{{ item }}"
+  loop:
+    - "{{ openbao_vector_opensearch_username_file }}"
+    - "{{ openbao_vector_opensearch_password_file }}"
+  register: openbao_vector_secret_file_wait
+  changed_when: false
+  until: openbao_vector_secret_file_wait.rc == 0
+  retries: 24
+  delay: 5
+  no_log: true
+
+- name: Reconcile Vector secret file permissions
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: file
+    owner: root
+    group: "{{ openbao_vector_service_group }}"
+    mode: "0640"
+  loop:
+    - "{{ openbao_vector_opensearch_username_file }}"
+    - "{{ openbao_vector_opensearch_password_file }}"
+  no_log: true
+  notify: Restart Vector
+
+- name: Render Vector configuration
+  ansible.builtin.template:
+    src: vector.yaml.j2
+    dest: "{{ openbao_vector_config_file }}"
+    owner: root
+    group: "{{ openbao_vector_service_group }}"
+    mode: "0640"
+    validate: "vector validate --skip-healthchecks %s"
+  notify: Restart Vector
+
+- name: Validate Vector configuration
+  ansible.builtin.command:
+    argv:
+      - vector
+      - validate
+      - --skip-healthchecks
+      - "{{ openbao_vector_config_file }}"
+  register: openbao_vector_config_validation
+  changed_when: false
+
+- name: Flush Vector handlers before service start
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start Vector
+  ansible.builtin.service:
+    name: "{{ openbao_vector_service_name }}"
+    enabled: true
+    state: started

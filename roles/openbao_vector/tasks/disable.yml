@@ -1,0 +1,10 @@
+---
+- name: Gather service facts for Vector disable
+  ansible.builtin.service_facts:
+
+- name: Stop and disable Vector when log forwarding is not selected
+  ansible.builtin.systemd:
+    name: "{{ openbao_vector_service_name }}"
+    enabled: false
+    state: stopped
+  when: "(openbao_vector_service_name ~ '.service') in ansible_facts.services"

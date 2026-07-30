@@ -4,10 +4,60 @@
     openbao_agent_identity_role_name: "{{ hostvars[openbao_agent_host].openbao_agent_role_name }}"
     openbao_agent_identity_policy_name: "{{ hostvars[openbao_agent_host].openbao_agent_policy_name }}"
     openbao_agent_identity_artifact: "{{ hostvars[openbao_agent_host].openbao_agent_approle_artifact }}"
+    openbao_agent_identity_listener_cert_enabled: "{{ hostvars[openbao_agent_host].openbao_agent_listener_cert_enabled | bool }}"
+    openbao_agent_identity_vector_secret_enabled: "{{ hostvars[openbao_agent_host].openbao_agent_vector_secret_enabled | bool }}"
     openbao_agent_identity_cert_common_name: "{{ hostvars[openbao_agent_host].openbao_agent_cert_common_name }}"
     openbao_agent_identity_cert_dns_names: "{{ hostvars[openbao_agent_host].openbao_agent_cert_dns_names | unique | list }}"
     openbao_agent_identity_cert_ip_sans: "{{ hostvars[openbao_agent_host].openbao_agent_cert_ip_sans | default([]) | unique | list }}"
     openbao_agent_identity_cert_ttl: "{{ hostvars[openbao_agent_host].openbao_agent_cert_ttl }}"
+
+- name: Set OpenBao agent identity fingerprints for {{ openbao_agent_host }}
+  ansible.builtin.set_fact:
+    openbao_agent_identity_cert_name_fingerprint: >-
+      {{
+        {
+          'dns_names': openbao_agent_identity_cert_dns_names,
+          'ip_sans': openbao_agent_identity_cert_ip_sans
+        } | to_json | hash('sha256')
+      }}
+    openbao_agent_identity_policy_fingerprint: >-
+      {{
+        {
+          'listener_cert_enabled': openbao_agent_identity_listener_cert_enabled | bool,
+          'vector_secret_enabled': openbao_agent_identity_vector_secret_enabled | bool,
+          'cert_dns_names': (
+            openbao_agent_identity_cert_dns_names
+            if openbao_agent_identity_listener_cert_enabled | bool
+            else []
+          ),
+          'cert_ip_sans': (
+            openbao_agent_identity_cert_ip_sans
+            if openbao_agent_identity_listener_cert_enabled | bool
+            else []
+          ),
+          'vector_secret_mount': (
+            openbao_vector_opensearch_secret_mount
+            if openbao_agent_identity_vector_secret_enabled | bool
+            else ''
+          ),
+          'vector_secret_path': (
+            openbao_vector_opensearch_secret_path
+            if openbao_agent_identity_vector_secret_enabled | bool
+            else ''
+          ),
+          'vector_username_field': (
+            openbao_vector_opensearch_username_field
+            if openbao_agent_identity_vector_secret_enabled | bool
+            else ''
+          ),
+          'vector_password_field': (
+            openbao_vector_opensearch_password_field
+            if openbao_agent_identity_vector_secret_enabled | bool
+            else ''
+          )
+        } | to_json | hash('sha256')
+      }}
+  no_log: true
 
 - name: Configure OpenBao agent listener certificate role for {{ openbao_agent_host }}
   ansible.builtin.command:
@@ -34,12 +84,13 @@
           'max_ttl=' ~ openbao_pki_leaf_max_ttl
         ]
       }}
-  environment: "{{ openbao_pki_environment }}"
-  delegate_to: "{{ openbao_pki_host }}"
+  environment: "{{ openbao_agent_management_environment }}"
+  delegate_to: "{{ openbao_agent_management_host }}"
   changed_when: false
   no_log: true
+  when: openbao_agent_identity_listener_cert_enabled | bool
 
-- name: Configure OpenBao agent certificate policy for {{ openbao_agent_host }}
+- name: Configure OpenBao agent policy for {{ openbao_agent_host }}
   ansible.builtin.command:
     argv:
       - bao
@@ -48,11 +99,18 @@
       - "{{ openbao_agent_identity_policy_name }}"
       - "-"
     stdin: |
+      {% if openbao_agent_identity_listener_cert_enabled | bool %}
       path "{{ openbao_pki_mount }}/issue/{{ openbao_agent_identity_role_name }}" {
         capabilities = ["update"]
       }
-  environment: "{{ openbao_pki_environment }}"
-  delegate_to: "{{ openbao_pki_host }}"
+      {% endif %}
+      {% if openbao_agent_identity_vector_secret_enabled | bool %}
+      path "{{ openbao_vector_opensearch_kv2_data_path }}" {
+        capabilities = ["read"]
+      }
+      {% endif %}
+  environment: "{{ openbao_agent_management_environment }}"
+  delegate_to: "{{ openbao_agent_management_host }}"
   changed_when: false
   no_log: true
 
@@ -81,8 +139,8 @@
           else []
         )
       }}
-  environment: "{{ openbao_pki_environment }}"
-  delegate_to: "{{ openbao_pki_host }}"
+  environment: "{{ openbao_agent_management_environment }}"
+  delegate_to: "{{ openbao_agent_management_host }}"
   changed_when: false
   no_log: true
 
@@ -93,8 +151,8 @@
       - read
       - -format=json
       - "auth/{{ openbao_agent_auth_mount }}/role/{{ openbao_agent_identity_role_name }}/role-id"
-  environment: "{{ openbao_pki_environment }}"
-  delegate_to: "{{ openbao_pki_host }}"
+  environment: "{{ openbao_agent_management_environment }}"
+  delegate_to: "{{ openbao_agent_management_host }}"
   register: openbao_agent_role_id_result
   changed_when: false
   no_log: true
@@ -128,13 +186,6 @@
         if openbao_agent_identity_artifact_stat.stat.exists
         else {}
       }}
-    openbao_agent_identity_cert_name_fingerprint: >-
-      {{
-        {
-          'dns_names': openbao_agent_identity_cert_dns_names,
-          'ip_sans': openbao_agent_identity_cert_ip_sans
-        } | to_json | hash('sha256')
-      }}
   no_log: true
 
 - name: Determine OpenBao agent AppRole artifact currency for {{ openbao_agent_host }}
@@ -143,13 +194,14 @@
       {{
         (not (openbao_agent_rotate_secret_ids | bool))
         and openbao_agent_identity_artifact_stat.stat.exists
-        and (openbao_agent_identity_artifact_data.cluster_id | default('')) == openbao_pki_cluster_id
+        and (openbao_agent_identity_artifact_data.cluster_id | default('')) == openbao_agent_management_cluster_id
         and (openbao_agent_identity_artifact_data.host | default('')) == openbao_agent_host
         and (openbao_agent_identity_artifact_data.auth_mount | default('')) == openbao_agent_auth_mount
         and (openbao_agent_identity_artifact_data.role_name | default('')) == openbao_agent_identity_role_name
         and (openbao_agent_identity_artifact_data.policy_name | default('')) == openbao_agent_identity_policy_name
         and (openbao_agent_identity_artifact_data.role_id | default('')) == openbao_agent_identity_role_id
-        and (openbao_agent_identity_artifact_data.cert_name_fingerprint | default('')) == openbao_agent_identity_cert_name_fingerprint
+        and (openbao_agent_identity_artifact_data.secret_id | default('') | length) > 0
+        and (openbao_agent_identity_artifact_data.identity_policy_fingerprint | default('')) == openbao_agent_identity_policy_fingerprint
       }}
   no_log: true
 
@@ -161,8 +213,8 @@
       - -format=json
       - "auth/{{ openbao_agent_auth_mount }}/role/{{ openbao_agent_identity_role_name }}/secret-id"
       - "metadata={{ {'host': openbao_agent_host, 'role_name': openbao_agent_identity_role_name} | to_json }}"
-  environment: "{{ openbao_pki_environment }}"
-  delegate_to: "{{ openbao_pki_host }}"
+  environment: "{{ openbao_agent_management_environment }}"
+  delegate_to: "{{ openbao_agent_management_host }}"
   register: openbao_agent_secret_id_result
   changed_when: true
   no_log: true
@@ -174,17 +226,24 @@
       {{
         {
           'host': openbao_agent_host,
-          'cluster_id': openbao_pki_cluster_id,
+          'cluster_id': openbao_agent_management_cluster_id,
           'auth_mount': openbao_agent_auth_mount,
           'role_name': openbao_agent_identity_role_name,
           'policy_name': openbao_agent_identity_policy_name,
           'role_id': openbao_agent_identity_role_id,
           'secret_id': (openbao_agent_secret_id_result.stdout | from_json).data.secret_id,
           'secret_id_accessor': (openbao_agent_secret_id_result.stdout | from_json).data.secret_id_accessor,
+          'listener_cert_enabled': openbao_agent_identity_listener_cert_enabled | bool,
+          'vector_secret_enabled': openbao_agent_identity_vector_secret_enabled | bool,
           'cert_common_name': openbao_agent_identity_cert_common_name,
           'cert_dns_names': openbao_agent_identity_cert_dns_names,
           'cert_ip_sans': openbao_agent_identity_cert_ip_sans,
-          'cert_name_fingerprint': openbao_agent_identity_cert_name_fingerprint
+          'cert_name_fingerprint': openbao_agent_identity_cert_name_fingerprint,
+          'vector_secret_mount': openbao_vector_opensearch_secret_mount,
+          'vector_secret_path': openbao_vector_opensearch_secret_path,
+          'vector_username_field': openbao_vector_opensearch_username_field,
+          'vector_password_field': openbao_vector_opensearch_password_field,
+          'identity_policy_fingerprint': openbao_agent_identity_policy_fingerprint
         } | to_nice_json
       }}
     dest: "{{ openbao_agent_identity_artifact }}"

@@ -24,6 +24,13 @@ target is `rhel10`; prod/test runs select `openbao-prod` or `openbao-test` with
 - `openbao_tls_trust_source`
 - `openbao_manage_firewalld`
 - `openbao_manage_selinux`
+- `openbao_vector_enabled`
+- `openbao_vector_opensearch_endpoints`
+- `openbao_vector_opensearch_secret_mount`
+- `openbao_vector_opensearch_secret_path`
+- `openbao_vector_opensearch_tls_ca_file`
+- `openbao_vector_seed_opensearch_secret`
+- `openbao_vector_opensearch_secret_data`
 - `openbao_validate_known_user_vars`
 - `openbao_user_var_allowlist`
 
@@ -67,6 +74,89 @@ Renewal-mode PKI values:
 Legacy static seal input is still supported by setting
 `openbao_static_seal_source=variable` and `openbao_static_unseal_key_b64`.
 
+## Vector OpenSearch Logging
+
+```yaml
+openbao_vector_enabled: false
+```
+
+When enabled, `playbooks/site.yml` installs and configures Vector on every
+selected OpenBao node. Vector collects `openbao_audit_log_file` through a file
+source, collects service logs from `openbao_vector_journald_units`, tags events
+with cluster/node/source metadata, and forwards them to OpenSearch.
+
+Required production inputs when enabling Vector:
+
+```yaml
+openbao_vector_enabled: true
+openbao_vector_opensearch_endpoints:
+  - https://opensearch.example.com:9200
+openbao_vector_opensearch_secret_mount: secret
+openbao_vector_opensearch_secret_path: observability/opensearch/openbao-vector
+```
+
+The target hosts must already have a trusted package source for
+`openbao_vector_package_name` (`vector` by default), or the variable must point
+at an approved RPM URL. This role installs the package but does not add the
+vendor YUM repository.
+
+The OpenSearch credential secret is read from OpenBao KV v2 by OpenBao Agent.
+With the default values, create this secret before enabling Vector on an
+already-running cluster:
+
+```text
+secret/data/observability/opensearch/openbao-vector
+```
+
+Expected fields:
+
+```yaml
+username: openbao-vector
+password: change-me
+```
+
+The generated Vector config references local Agent-rendered files with
+`SECRET[openbao_vector.username]` and `SECRET[openbao_vector.password]`; it
+does not include plaintext credentials. OpenBao Agent is enabled automatically
+for Vector secret rendering, but listener certificate renewal is still
+controlled separately by `openbao_certificate_mode: agent`.
+
+For repeatable replacement or lab runs, Ansible can seed the KV v2 secret after
+OpenBao is initialized:
+
+```yaml
+openbao_vector_seed_opensearch_secret: true
+openbao_vector_opensearch_secret_data:
+  username: openbao-vector
+  password: "{{ vaulted_openbao_vector_opensearch_password }}"
+```
+
+Keep `openbao_vector_opensearch_secret_data` in an encrypted vault or lab-only
+extra vars. It is empty by default and should not be committed with real
+credentials.
+
+Common Vector variables:
+
+- `openbao_vector_package_name`: package name or approved RPM URL; default
+  `vector`.
+- `openbao_vector_collect_audit`: collect `openbao_audit_log_file`; default
+  `true`.
+- `openbao_audit_log_mode`: managed file mode for `openbao_audit_log_file`;
+  default `0640` so the Vector service user can read it through the OpenBao
+  group.
+- `openbao_vector_collect_journald`: collect systemd journal entries; default
+  `true`.
+- `openbao_vector_journald_units`: defaults to `openbao.service` and
+  `openbao-agent.service`.
+- `openbao_vector_opensearch_index`: default daily index pattern
+  `openbao-{{ openbao_cluster_name }}-%Y.%m.%d`.
+- `openbao_vector_opensearch_service_type`: `managed` or `serverless`; default
+  `managed`.
+- `openbao_vector_opensearch_tls_ca_file`: optional CA file for the OpenSearch
+  endpoint.
+- `openbao_vector_validate_sink_health`: run Vector sink health checks during
+  validation; default `false`.
+
 ## Defaults
 
 Most low-level settings are in `group_vars/all/openbao_defaults.yml`, including:
@@ -78,6 +168,7 @@ Most low-level settings are in `group_vars/all/openbao_defaults.yml`, including:
 - PKI mount names, role names, and TTLs
 - OpenBao Agent paths and AppRole defaults
 - native ACME fallback settings
+- Vector forwarding, OpenSearch sink, and rendered secret path defaults
 - audit, hardening, and artifact path defaults
 
 These are intended to be stable defaults. Override them only when the target
@@ -108,10 +199,12 @@ Replacement deletes the Ansible-managed OpenBao footprint:
 - logs and package cache
 - systemd units
 - OpenBao Agent config and state
+- managed Vector config, state, and rendered secrets
 - generated node-subCA bootstrap output
 - the selected controller artifact directory `openbao_secure_artifacts_dir`,
   including init JSON, static seal key artifacts, Agent AppRole artifacts,
   generated self-signed certificates, and snapshots
+- OpenBao-stored data, including the Vector OpenSearch credential secret
 
 Replacement preserves external operator inputs and OS basics:
 

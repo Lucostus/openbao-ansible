@@ -16,8 +16,10 @@
       - openbao_static_seal_source in ['generated_artifact', 'variable']
       - openbao_tls_trust_source in ['system', 'variable', 'file', 'node_subca']
       - openbao_pki_signing_source in ['variable', 'node_subca', 'node_subca_import']
+      - openbao_audit_log_mode is match('^0?[0-7]{3,4}$')
       - openbao_node_subca_topology in ['auto', 'single_signer', 'every_node']
-      - not (openbao_agent_enabled | bool) or openbao_pki_enabled | bool
+      - not (openbao_agent_listener_cert_enabled | bool) or openbao_pki_enabled | bool
+      - not (openbao_agent_vector_secret_enabled | bool) or openbao_vector_enabled | bool
       - not (openbao_native_acme_enabled | bool) or openbao_pki_enabled | bool
       - openbao_native_acme_challenge in ['http-01', 'tls-alpn-01']
       - openbao_native_acme_cache_mode in ['nfs', 'pre_mounted']
@@ -40,6 +42,9 @@
       - openbao_bootstrap_tls_missing_strategy != 'issue_from_node_subca' or openbao_bootstrap_tls_source == 'node'
       - not (openbao_native_acme_bootstrap_api_enabled | bool) or openbao_native_acme_bootstrap_api_port | int != openbao_listener_port | int
       - not (openbao_native_acme_bootstrap_api_enabled | bool) or openbao_native_acme_bootstrap_api_port | int != openbao_cluster_port | int
+      - openbao_vector_secret_source in ['openbao_agent']
+      - openbao_vector_opensearch_auth_strategy in ['basic']
+      - openbao_vector_opensearch_service_type in ['managed', 'serverless']
     fail_msg: "OpenBao TLS/LB/ACME variables are invalid; check the selected group_vars main.yml."
 
 - name: Assert node sub-CA signing topology was resolved
@@ -109,22 +114,29 @@
     - openbao_certificate_mode == 'native_acme'
     - openbao_native_acme_cache_mode == 'pre_mounted'
 
-- name: Assert OpenBao Agent certificate renewal settings are valid
+- name: Assert OpenBao Agent settings are valid
   ansible.builtin.assert:
     that:
       - openbao_agent_enabled | bool
       - openbao_agent_config_dir is match('^/')
       - openbao_agent_state_dir is match('^/')
-      - openbao_agent_bundle_path is match('^/')
-      - openbao_agent_bundle_template_path is match('^/')
       - openbao_agent_config_file is match('^/')
-      - openbao_agent_hook_path is match('^/')
       - openbao_agent_role_id_path is match('^/')
       - openbao_agent_secret_id_path is match('^/')
       - openbao_agent_auth_mount | length > 0
       - "'/' not in openbao_agent_auth_mount"
       - openbao_agent_role_name | length > 0
       - openbao_agent_policy_name | length > 0
+    fail_msg: "OpenBao Agent has invalid shared settings."
+  when: openbao_agent_enabled | bool
+
+- name: Assert OpenBao Agent certificate renewal settings are valid
+  ansible.builtin.assert:
+    that:
+      - openbao_agent_listener_cert_enabled | bool
+      - openbao_agent_bundle_path is match('^/')
+      - openbao_agent_bundle_template_path is match('^/')
+      - openbao_agent_hook_path is match('^/')
       - openbao_agent_cert_common_name | length > 0
       - openbao_agent_cert_dns_names | unique | length == openbao_agent_cert_dns_names | length
       - openbao_public_fqdn in openbao_agent_cert_dns_names
@@ -133,7 +145,60 @@
       - openbao_agent_cert_ttl | length > 0
       - openbao_agent_restart_jitter_seconds | int >= 0
     fail_msg: "openbao_certificate_mode=agent has invalid OpenBao Agent certificate settings."
-  when: openbao_certificate_mode == 'agent'
+  when: openbao_agent_listener_cert_enabled | bool
+
+- name: Assert Vector log forwarding settings are valid
+  ansible.builtin.assert:
+    that:
+      - openbao_vector_package_name | length > 0
+      - openbao_vector_service_name | length > 0
+      - openbao_vector_service_user | length > 0
+      - openbao_vector_service_group | length > 0
+      - openbao_vector_config_dir is match('^/')
+      - openbao_vector_config_file is match('^/')
+      - openbao_vector_data_dir is match('^/')
+      - openbao_vector_secret_dir is match('^/')
+      - openbao_vector_secret_backend_name is match('^[A-Za-z0-9_]+$')
+      - openbao_vector_collect_audit | bool or openbao_vector_collect_journald | bool
+      - not (openbao_vector_collect_journald | bool) or openbao_vector_journald_units | length > 0
+      - openbao_vector_opensearch_endpoints | length > 0
+      - >-
+        (
+          openbao_vector_opensearch_endpoints
+          | select('match', '^https?://')
+          | list
+          | length
+        ) == (openbao_vector_opensearch_endpoints | length)
+      - openbao_vector_opensearch_index | length > 0
+      - openbao_vector_opensearch_secret_mount | length > 0
+      - "'/' not in openbao_vector_opensearch_secret_mount"
+      - openbao_vector_opensearch_secret_path | length > 0
+      - not (openbao_vector_opensearch_secret_path is match('^/'))
+      - not (openbao_vector_opensearch_secret_path is match('(^|.*/)\\.\\.(/.*|$)'))
+      - openbao_vector_opensearch_username_field | length > 0
+      - openbao_vector_opensearch_password_field | length > 0
+      - openbao_vector_opensearch_username_file is match('^/')
+      - openbao_vector_opensearch_password_file is match('^/')
+      - openbao_agent_vector_secret_enabled | bool
+    fail_msg: "openbao_vector_enabled=true has invalid Vector/OpenSearch settings."
+  when: openbao_vector_enabled | bool
+
+- name: Assert Vector OpenSearch seed secret data is valid when selected
+  ansible.builtin.assert:
+    that:
+      - openbao_vector_opensearch_secret_data is mapping
+      - openbao_vector_opensearch_username_field in openbao_vector_opensearch_secret_data
+      - openbao_vector_opensearch_password_field in openbao_vector_opensearch_secret_data
+      - (openbao_vector_opensearch_secret_data[openbao_vector_opensearch_username_field] | string | length) > 0
+      - (openbao_vector_opensearch_secret_data[openbao_vector_opensearch_password_field] | string | length) > 0
+    fail_msg: >-
+      openbao_vector_seed_opensearch_secret=true requires
+      openbao_vector_opensearch_secret_data with non-empty configured username
+      and password fields.
+  no_log: true
+  when:
+    - openbao_vector_enabled | bool
+    - openbao_vector_seed_opensearch_secret | bool
 
 - name: Assert RHEL-like systemd host
   ansible.builtin.assert:

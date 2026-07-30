@@ -1,0 +1,205 @@
+---
+- name: Set OpenBao Agent identity management host fact
+  ansible.builtin.set_fact:
+    openbao_agent_management_host: "{{ groups[openbao_cluster_group][0] }}"
+  run_once: true
+
+- name: Load init artifact when no operator token was supplied for Agent identity management
+  ansible.builtin.slurp:
+    src: "{{ openbao_init_artifact }}"
+  delegate_to: localhost
+  become: false
+  register: openbao_agent_management_init_artifact
+  no_log: true
+  run_once: true
+  when: openbao_operator_token | length == 0
+
+- name: Set OpenBao Agent identity management token fact
+  ansible.builtin.set_fact:
+    openbao_agent_management_token: >-
+      {{
+        openbao_operator_token
+        if openbao_operator_token | length > 0
+        else ((openbao_agent_management_init_artifact.content | b64decode | from_json).root_token)
+      }}
+  no_log: true
+  run_once: true
+
+- name: Set OpenBao Agent identity management environment
+  ansible.builtin.set_fact:
+    openbao_agent_management_environment:
+      BAO_ADDR: "{{ hostvars[openbao_agent_management_host].openbao_cli_addr }}"
+      VAULT_ADDR: "{{ hostvars[openbao_agent_management_host].openbao_cli_addr }}"
+      BAO_CACERT: "{{ hostvars[openbao_agent_management_host].openbao_ca_cert_file }}"
+      VAULT_CACERT: "{{ hostvars[openbao_agent_management_host].openbao_ca_cert_file }}"
+      BAO_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+      VAULT_TLS_SERVER_NAME: "{{ openbao_tls_server_name }}"
+      BAO_TOKEN: "{{ openbao_agent_management_token }}"
+      VAULT_TOKEN: "{{ openbao_agent_management_token }}"
+  no_log: true
+  run_once: true
+
+- name: Read OpenBao cluster status for Agent identity artifacts
+  ansible.builtin.command: bao status -format=json
+  environment: "{{ openbao_agent_management_environment }}"
+  delegate_to: "{{ openbao_agent_management_host }}"
+  register: openbao_agent_management_cluster_status
+  changed_when: false
+  no_log: true
+  run_once: true
+
+- name: Set OpenBao cluster identifier for Agent identity artifacts
+  ansible.builtin.set_fact:
+    openbao_agent_management_cluster_id: "{{ (openbao_agent_management_cluster_status.stdout | from_json).cluster_id }}"
+  run_once: true
+
+- name: Ensure secure artifact directory exists on controller for Agent identities
+  ansible.builtin.file:
+    path: "{{ openbao_secure_artifacts_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Read existing secret mounts for Vector OpenSearch secret
+  ansible.builtin.command:
+    argv:
+      - bao
+      - secrets
+      - list
+      - -format=json
+  environment: "{{ openbao_agent_management_environment }}"
+  delegate_to: "{{ openbao_agent_management_host }}"
+  register: openbao_agent_management_secret_mounts
+  changed_when: false
+  no_log: true
+  run_once: true
+  when: openbao_agent_vector_secret_enabled | bool
+
+- name: Enable KV v2 mount for seeded Vector OpenSearch secret when absent
+  ansible.builtin.command:
+    argv:
+      - bao
+      - secrets
+      - enable
+      - "-path={{ openbao_vector_opensearch_secret_mount }}"
+      - kv-v2
+  environment: "{{ openbao_agent_management_environment }}"
+  delegate_to: "{{ openbao_agent_management_host }}"
+  changed_when: true
+  no_log: true
+  run_once: true
+  when:
+    - openbao_agent_vector_secret_enabled | bool
+    - openbao_vector_seed_opensearch_secret | bool
+    - (openbao_vector_opensearch_secret_mount ~ '/') not in ((openbao_agent_management_secret_mounts.stdout | from_json).keys() | list)
+
+- name: Seed Vector OpenSearch credential secret when requested
+  ansible.builtin.command:
+    argv:
+      - bao
+      - kv
+      - put
+      - "-mount={{ openbao_vector_opensearch_secret_mount }}"
+      - "{{ openbao_vector_opensearch_secret_path }}"
+      - "{{ openbao_vector_opensearch_username_field }}={{ openbao_vector_opensearch_secret_data[openbao_vector_opensearch_username_field] }}"
+      - "{{ openbao_vector_opensearch_password_field }}={{ openbao_vector_opensearch_secret_data[openbao_vector_opensearch_password_field] }}"
+  environment: "{{ openbao_agent_management_environment }}"
+  delegate_to: "{{ openbao_agent_management_host }}"
+  changed_when: true
+  no_log: true
+  run_once: true
+  when:
+    - openbao_agent_vector_secret_enabled | bool
+    - openbao_vector_seed_opensearch_secret | bool
+
+- name: Read Vector OpenSearch credential secret from OpenBao
+  ansible.builtin.command:
+    argv:
+      - bao
+      - kv
+      - get
+      - -format=json
+      - "-mount={{ openbao_vector_opensearch_secret_mount }}"
+      - "{{ openbao_vector_opensearch_secret_path }}"
+  environment: "{{ openbao_agent_management_environment }}"
+  delegate_to: "{{ openbao_agent_management_host }}"
+  register: openbao_agent_management_vector_secret
+  changed_when: false
+  failed_when: false
+  no_log: true
+  run_once: true
+  when: openbao_agent_vector_secret_enabled | bool
+
+- name: Assert Vector OpenSearch credential secret exists and has required fields
+  ansible.builtin.assert:
+    that:
+      - openbao_agent_management_vector_secret.rc == 0
+      - >-
+        (
+          (openbao_agent_management_vector_secret.stdout | from_json).data.data.get(
+            openbao_vector_opensearch_username_field,
+            ''
+          ) | string | length
+        ) > 0
+      - >-
+        (
+          (openbao_agent_management_vector_secret.stdout | from_json).data.data.get(
+            openbao_vector_opensearch_password_field,
+            ''
+          ) | string | length
+        ) > 0
+    fail_msg: >-
+      Missing OpenBao KV v2 secret {{ openbao_vector_opensearch_secret_mount
+      }}/data/{{ openbao_vector_opensearch_secret_path }} with required
+      {{ openbao_vector_opensearch_username_field }} and
+      {{ openbao_vector_opensearch_password_field }} fields. Create it or set
+      openbao_vector_seed_opensearch_secret=true with vaulted seed data.
+  no_log: true
+  run_once: true
+  when: openbao_agent_vector_secret_enabled | bool
+
+- name: Read enabled auth methods for OpenBao agents
+  ansible.builtin.command:
+    argv:
+      - bao
+      - auth
+      - list
+      - -format=json
+  environment: "{{ openbao_agent_management_environment }}"
+  delegate_to: "{{ openbao_agent_management_host }}"
+  register: openbao_agent_management_auth_methods
+  changed_when: false
+  no_log: true
+  run_once: true
+
+- name: Assert OpenBao agent auth mount is AppRole when present
+  ansible.builtin.assert:
+    that:
+      - ((openbao_agent_management_auth_methods.stdout | from_json)[openbao_agent_auth_mount ~ '/'].type | default('')) == 'approle'
+    fail_msg: "Auth mount {{ openbao_agent_auth_mount }}/ already exists but is not AppRole."
+  run_once: true
+  when: (openbao_agent_auth_mount ~ '/') in ((openbao_agent_management_auth_methods.stdout | from_json).keys() | list)
+
+- name: Enable AppRole auth method for OpenBao agents
+  ansible.builtin.command:
+    argv:
+      - bao
+      - auth
+      - enable
+      - "-path={{ openbao_agent_auth_mount }}"
+      - approle
+  environment: "{{ openbao_agent_management_environment }}"
+  delegate_to: "{{ openbao_agent_management_host }}"
+  changed_when: true
+  no_log: true
+  run_once: true
+  when: (openbao_agent_auth_mount ~ '/') not in ((openbao_agent_management_auth_methods.stdout | from_json).keys() | list)
+
+- name: Configure per-node OpenBao Agent identities
+  ansible.builtin.include_tasks: configure_agent_identity.yml
+  loop: "{{ groups[openbao_cluster_group] }}"
+  loop_control:
+    loop_var: openbao_agent_host
+  run_once: true

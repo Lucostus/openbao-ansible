@@ -33,7 +33,7 @@
       ansible.builtin.import_tasks: ../roles/openbao_common/tasks/replace_existing.yml
       when: openbao_replace_existing | bool
 
-- name: Disable OpenBao Agent when Agent renewal is not selected
+- name: Disable OpenBao Agent when Agent-backed features are not selected
   hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true
   gather_facts: false
@@ -47,6 +47,21 @@
     - name: Stop and disable OpenBao Agent
       ansible.builtin.import_tasks: ../roles/openbao_agent/tasks/disable.yml
       when: not (openbao_agent_enabled | bool)
+
+- name: Disable Vector log forwarding when not selected
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    openbao_validate_bootstrap_inputs: false
+  pre_tasks:
+    - name: Load OpenBao variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
+  tasks:
+    - name: Stop and disable Vector
+      ansible.builtin.import_tasks: ../roles/openbao_vector/tasks/disable.yml
+      when: not (openbao_vector_enabled | bool)
 
 - name: Prepare OpenBao servers and configure PKI
   hosts: "{{ openbao_target_group | default('rhel10') }}"
@@ -68,7 +83,11 @@
         name: openbao_pki
       when: openbao_pki_enabled | bool
 
-- name: Converge OpenBao Agent listener certificates
+    - name: Configure OpenBao Agent identities when Agent-backed features are selected
+      ansible.builtin.include_tasks: ../roles/openbao_common/tasks/configure_agent_identities.yml
+      when: openbao_agent_enabled | bool
+
+- name: Converge OpenBao Agent managed templates
   hosts: "{{ openbao_target_group | default('rhel10') }}"
   become: true
   gather_facts: false
@@ -82,6 +101,20 @@
   roles:
     - role: openbao_agent
       when: openbao_agent_enabled | bool
+
+- name: Converge Vector log forwarding
+  hosts: "{{ openbao_target_group | default('rhel10') }}"
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    openbao_validate_bootstrap_inputs: false
+  pre_tasks:
+    - name: Load OpenBao secret variables
+      ansible.builtin.import_tasks: ../roles/openbao_common/tasks/load_openbao_vars.yml
+  roles:
+    - role: openbao_vector
+      when: openbao_vector_enabled | bool
 
 - name: Converge native listener ACME
   hosts: "{{ openbao_target_group | default('rhel10') }}"
